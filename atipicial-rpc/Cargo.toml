@@ -1,0 +1,196 @@
+[package]
+name = "atipicial-rpc"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "RPC server and client for Atipicial blockchain"
+
+# The websocket-events integration test exercises the server module, which is
+# gated behind the (non-default) `server` feature.
+[[test]]
+name = "ws_events"
+path = "tests/server/ws_events.rs"
+required-features = ["server"]
+
+[[test]]
+name = "jsonrpsee_adapter"
+path = "tests/server/jsonrpsee_adapter.rs"
+required-features = ["server"]
+
+[[test]]
+name = "rate_limiter_governor"
+path = "tests/server/rate_limiter_governor.rs"
+required-features = ["server"]
+
+[[test]]
+name = "rpc_blockchain_getrawtransaction_vmstate"
+path = "tests/server/rpc_blockchain_getrawtransaction_vmstate.rs"
+required-features = ["server"]
+
+[[test]]
+name = "rpc_handler_registration"
+path = "tests/server/rpc_handler_registration.rs"
+required-features = ["server"]
+
+[[test]]
+name = "validate_address"
+path = "tests/server/validate_address.rs"
+required-features = ["server"]
+
+[dependencies]
+# Internal crates — always needed (error/error_code modules)
+atipicial-primitives = { workspace = true }
+atipicial-error = { workspace = true }
+
+# Internal crates — needed by both client and server (serialization, models)
+atipicial-crypto = { workspace = true, optional = true }
+atipicial-io = { workspace = true, optional = true }
+atipicial-manifest = { workspace = true, optional = true }
+atipicial-native-contracts = { workspace = true, optional = true }
+atipicial-storage = { workspace = true, optional = true }
+atipicial-vm = { workspace = true, optional = true }
+atipicial-wallets = { workspace = true, optional = true }
+atipicial-serialization = { workspace = true, optional = true }
+
+# Internal crates — client feature
+atipicial-config = { workspace = true, optional = true }
+atipicial-execution = { workspace = true, optional = true }
+atipicial-payloads = { workspace = true, optional = true }
+
+# Internal crates — server feature only
+atipicial-runtime = { workspace = true, optional = true }
+atipicial-oracle-service = { workspace = true, optional = true }
+atipicial-indexer = { workspace = true, optional = true }
+atipicial-network = { workspace = true, optional = true }
+atipicial-state-service = { workspace = true, optional = true }
+atipicial-blockchain = { workspace = true, optional = true }
+atipicial-mempool = { workspace = true, optional = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Web server (server feature)
+# jsonrpsee is the canonical JSON-RPC transport for the server.
+# The legacy HTTP routing glue has been removed; see the
+# `2026-06-13-comprehensive-refactoring` change (Phase C1) for the
+# migration history.
+jsonrpsee = { version = "0.24.10", optional = true, default-features = false, features = ["server"] }
+tower = { version = "0.4", optional = true }
+
+# Rate limiting (server feature)
+dashmap = { workspace = true, optional = true }
+governor = { workspace = true, optional = true }
+
+# HTTP client (client feature)
+reqwest = { workspace = true, optional = true }
+
+# Utilities
+uuid = { workspace = true, optional = true }
+parking_lot = { workspace = true, optional = true }
+prometheus = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+num-bigint = { workspace = true, optional = true }
+num-traits = { workspace = true, optional = true }
+hex = { workspace = true, optional = true }
+
+# Cryptography (server feature)
+rand = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
+subtle = { workspace = true, optional = true }
+
+
+[dev-dependencies]
+mockito = { workspace = true }
+atipicial-system = { workspace = true }
+atipicial-test-fixtures = { workspace = true }
+atipicial-trie = { workspace = true }
+regex = "1.10"
+
+[features]
+default = []
+server = [
+    "dep:jsonrpsee",
+    "dep:tower",
+    # Shared client+server deps
+    "dep:atipicial-crypto",
+    "dep:atipicial-io",
+    "dep:atipicial-manifest",
+    "dep:atipicial-native-contracts",
+    "dep:atipicial-storage",
+    "dep:atipicial-vm",
+    "dep:atipicial-wallets",
+    "dep:atipicial-serialization",
+    # Protocol and shared RPC model deps
+    "dep:atipicial-config",
+    "dep:atipicial-execution",
+    "dep:atipicial-payloads",
+    # Server-only deps
+    "dep:atipicial-runtime",
+    "dep:atipicial-oracle-service",
+    "dep:atipicial-indexer",
+    "dep:atipicial-network",
+    "dep:atipicial-state-service",
+    "dep:atipicial-blockchain",
+    "dep:atipicial-mempool",
+    # External server deps
+    "dep:uuid",
+    "dep:parking_lot",
+    "dep:prometheus",
+    "dep:base64",
+    "dep:bytes",
+    "dep:num-bigint",
+    "dep:num-traits",
+    "dep:hex",
+    "dep:rand",
+    "dep:zeroize",
+    "dep:subtle",
+    "dep:dashmap",
+    "dep:governor",
+    # RPC-only node mode fetches canonical ledger data from a remote endpoint.
+    "dep:reqwest",
+]
+client = [
+    # Shared client+server deps
+    "dep:atipicial-crypto",
+    "dep:atipicial-io",
+    "dep:atipicial-manifest",
+    "dep:atipicial-native-contracts",
+    "dep:atipicial-storage",
+    "dep:atipicial-vm",
+    "dep:atipicial-wallets",
+    "dep:atipicial-serialization",
+    # Client deps
+    "dep:atipicial-config",
+    "dep:atipicial-payloads",
+    "dep:atipicial-execution",
+    # External client deps
+    "dep:reqwest",
+    "dep:base64",
+    "dep:hex",
+    "dep:num-bigint",
+    "dep:num-traits",
+    "dep:rand",
+    "dep:zeroize",
+]
+
+[lints]
+workspace = true

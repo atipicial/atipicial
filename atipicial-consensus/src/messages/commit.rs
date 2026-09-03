@@ -1,0 +1,64 @@
+//! Commit message - sent when a validator is ready to commit the block.
+
+use crate::{ConsensusMessageType, ConsensusResult};
+use serde::{Deserialize, Serialize};
+
+/// Commit message sent when a validator has received enough `PrepareResponses`
+/// and is ready to commit the block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CommitMessage {
+    /// Block index
+    pub block_index: u32,
+    /// View number
+    pub view_number: u8,
+    /// Validator index
+    pub validator_index: u8,
+    /// Signature over the block hash
+    pub signature: Vec<u8>,
+}
+
+impl CommitMessage {
+    /// Creates a new Commit message
+    #[must_use]
+    pub const fn new(
+        block_index: u32,
+        view_number: u8,
+        validator_index: u8,
+        signature: Vec<u8>,
+    ) -> Self {
+        Self {
+            block_index,
+            view_number,
+            validator_index,
+            signature,
+        }
+    }
+
+    /// Returns the message type
+    #[must_use]
+    pub const fn message_type(&self) -> ConsensusMessageType {
+        ConsensusMessageType::Commit
+    }
+
+    /// Serializes the message to bytes
+    #[must_use]
+    pub fn serialize(&self) -> Vec<u8> {
+        self.signature.clone()
+    }
+
+    /// Validates the signature length
+    pub fn validate(&self) -> ConsensusResult<()> {
+        // ECDSA signature should be 64 bytes (r + s)
+        if self.signature.len() != 64 {
+            return Err(crate::ConsensusError::InvalidSignatureLength {
+                expected: 64,
+                got: self.signature.len(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[path = "../tests/messages/commit.rs"]
+mod tests;

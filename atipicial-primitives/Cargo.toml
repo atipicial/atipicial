@@ -1,0 +1,59 @@
+[package]
+name = "atipicial-primitives"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Primitive types for Atipicial blockchain (UInt160, UInt256, BigDecimal, etc.)"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+bitflags = { workspace = true }
+
+# Encoding
+hex = { workspace = true }
+bs58 = { workspace = true }
+
+# Hashing (for address computation)
+sha2 = { workspace = true }
+ripemd = { workspace = true }
+
+# Numeric types
+num-bigint = { workspace = true }
+num-integer = { workspace = true }
+num-traits = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Testable time source
+chrono = { workspace = true }
+parking_lot = { workspace = true }
+
+# NOTE: atipicial-primitives is a Layer 0 crate with NO atipicial-* dependencies
+# Serializable implementations for UInt160/UInt256 are in atipicial-io::serializable::primitives
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[[test]]
+name = "primitives_properties"
+path = "tests/properties/primitives_properties.rs"
+
+[features]
+default = []
+
+[lints]
+workspace = true

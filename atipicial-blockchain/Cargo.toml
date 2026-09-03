@@ -1,0 +1,56 @@
+[package]
+name = "atipicial-blockchain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Reth-style blockchain service for Atipicial (canonical home of Blockchain, LedgerContext, HeaderCache)"
+
+[dependencies]
+# Lower protocol, infrastructure, and domain layers
+atipicial-primitives = { workspace = true }
+atipicial-error = { workspace = true }
+atipicial-io = { workspace = true }
+atipicial-crypto = { workspace = true }
+atipicial-storage = { workspace = true }
+atipicial-static-files = { workspace = true }
+atipicial-payloads = { workspace = true }
+atipicial-manifest = { workspace = true }
+atipicial-vm = { workspace = true }
+atipicial-serialization = { workspace = true }
+atipicial-mempool = { workspace = true }
+atipicial-runtime = { workspace = true }
+atipicial-state-service = { workspace = true }
+atipicial-config = { workspace = true }
+atipicial-execution = { workspace = true }
+# Ledger-record codec (serialize_persisted_transaction_state /
+# serialize_conflict_stub / serialize_hash_index_state) + native ids: the
+# persist pipeline writes the records the LedgerContract reads.
+atipicial-native-contracts = { workspace = true }
+
+# External
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+lru = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+atipicial-test-fixtures = { workspace = true }
+num-bigint = { workspace = true }
+tempfile = { workspace = true }
+
+[features]
+default = []
+
+[lints]
+workspace = true

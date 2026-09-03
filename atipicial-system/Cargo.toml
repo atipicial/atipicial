@@ -1,0 +1,41 @@
+[package]
+name = "atipicial-system"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Atipicial node orchestrator (Node builder) — reth-style service composition root"
+
+[dependencies]
+# Lower layers wired by the composition root
+atipicial-primitives = { workspace = true }
+atipicial-storage = { workspace = true }
+atipicial-payloads = { workspace = true }
+
+# Node and domain service crates
+atipicial-blockchain = { workspace = true }
+atipicial-mempool = { workspace = true }
+atipicial-network = { workspace = true }
+atipicial-wallets = { workspace = true }
+atipicial-native-contracts = { workspace = true }
+atipicial-execution = { workspace = true }
+atipicial-config = { workspace = true }
+
+# Runtime service traits
+atipicial-runtime = { workspace = true }
+
+# External
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync"] }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+parking_lot = { workspace = true }
+
+[lints]
+workspace = true

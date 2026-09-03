@@ -1,0 +1,44 @@
+[package]
+name = "atipicial-wallets"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Canonical home for the Atipicial wallet layer: keypair, BIP-32/BIP-39 helpers, AEP-6 wallets, wallet accounts, wallet manager and factory registry, witness-script helpers"
+
+[dependencies]
+# Foundation layer
+atipicial-primitives = { workspace = true }
+atipicial-error = { workspace = true }
+atipicial-crypto = { workspace = true }
+atipicial-config = { workspace = true }
+atipicial-storage = { workspace = true }
+atipicial-payloads = { workspace = true }
+atipicial-runtime = { workspace = true }
+atipicial-native-contracts = { workspace = true }
+atipicial-vm = { workspace = true }
+
+# External
+bip39 = { workspace = true }
+zeroize = { workspace = true }
+aes = { workspace = true }
+scrypt = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+base64 = { workspace = true }
+subtle = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+atipicial-execution = { workspace = true }
+
+[lints]
+workspace = true

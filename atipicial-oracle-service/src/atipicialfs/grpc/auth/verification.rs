@@ -1,0 +1,30 @@
+use super::super::super::auth::AtipicialFsBearerSigner;
+use super::super::super::proto::atipicialfs_v2;
+use atipicial_error::CoreResult;
+use atipicial_wallets::KeyPair;
+use prost::Message;
+
+pub(crate) fn build_atipicialfs_request_verification_header<B: Message>(
+    body: &B,
+    meta: &atipicialfs_v2::session::RequestMetaHeader,
+    key: &KeyPair,
+) -> CoreResult<atipicialfs_v2::session::RequestVerificationHeader> {
+    let body_signature = atipicialfs_sign_message_part(&body.encode_to_vec(), key)?;
+    let meta_signature = atipicialfs_sign_message_part(&meta.encode_to_vec(), key)?;
+    let origin_signature = atipicialfs_sign_message_part(&[], key)?;
+    Ok(atipicialfs_v2::session::RequestVerificationHeader {
+        body_signature: Some(body_signature),
+        meta_signature: Some(meta_signature),
+        origin_signature: Some(origin_signature),
+        origin: None,
+    })
+}
+
+fn atipicialfs_sign_message_part(data: &[u8], key: &KeyPair) -> CoreResult<atipicialfs_v2::refs::Signature> {
+    let signature = AtipicialFsBearerSigner::sign_atipicialfs_sha512(data, key)?;
+    Ok(atipicialfs_v2::refs::Signature {
+        key: key.compressed_public_key(),
+        sign: signature,
+        scheme: atipicialfs_v2::refs::SignatureScheme::EcdsaSha512 as i32,
+    })
+}

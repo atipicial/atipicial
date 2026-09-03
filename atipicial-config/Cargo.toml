@@ -1,0 +1,26 @@
+[package]
+name = "atipicial-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Configuration management for Atipicial N3 blockchain node"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# Canonical chain specification, ProtocolSettings, and hardfork schedule.
+atipicial-primitives = { workspace = true }
+atipicial-error = { workspace = true }
+atipicial-crypto = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,35 @@
+[package]
+name = "atipicial-state-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Canonical home for the Atipicial state-service: state root, state root cache, state store, and block-commit handler pipeline"
+
+[dependencies]
+atipicial-primitives = { workspace = true }
+atipicial-storage = { workspace = true }
+atipicial-payloads = { workspace = true }
+atipicial-runtime = { workspace = true }
+atipicial-crypto = { workspace = true }
+atipicial-trie = { workspace = true }
+atipicial-io = { workspace = true }
+serde = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+lru = { workspace = true }
+rustc-hash = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+serde_json = { workspace = true }
+
+[lints]
+workspace = true

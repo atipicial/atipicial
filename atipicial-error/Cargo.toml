@@ -1,0 +1,22 @@
+[package]
+name = "atipicial-error"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Authoritative error type for the Atipicial workspace (CoreError + CoreResult)"
+
+[dependencies]
+atipicial-primitives = { workspace = true }
+atipicial-io = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

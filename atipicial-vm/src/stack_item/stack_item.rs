@@ -1,0 +1,827 @@
+#![allow(clippy::mutable_key_type)]
+
+//! Stack item implementation for the Atipicial Virtual Machine.
+//!
+//! This module provides the stack item implementations used in the Atipicial VM.
+
+use crate::ExecutionEngineLimits;
+use crate::StackItemType;
+use crate::VmOrderedDictionary;
+use crate::error::VmError;
+use crate::error::VmResult;
+use crate::reference_counter::ReferenceCounter;
+use crate::script::Script;
+use crate::stack_item::array::Array as ArrayItem;
+use crate::stack_item::buffer::Buffer as BufferItem;
+use crate::stack_item::map::Map as MapItem;
+use crate::stack_item::pointer::Pointer as PointerItem;
+use crate::stack_item::struct_item::Struct as StructItem;
+use num_bigint::BigInt;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
+
+use super::vm_integer::VmInteger;
+
+/// Concrete VM interop handles carried by [`StackItem::InteropInterface`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InteropInterface {
+    /// Engine-managed storage iterator handle.
+    Iterator {
+        /// Engine-side iterator table id.
+        id: u32,
+    },
+    /// BLS12-381 point represented by its canonical encoding.
+    Bls12381 {
+        /// Canonical compressed point or pairing bytes.
+        bytes: Vec<u8>,
+    },
+}
+
+impl InteropInterface {
+    /// Creates a storage iterator interop handle.
+    #[must_use]
+    pub const fn iterator(id: u32) -> Self {
+        Self::Iterator { id }
+    }
+
+    /// Creates a BLS12-381 point interop handle.
+    #[must_use]
+    pub fn bls12381(bytes: Vec<u8>) -> Self {
+        Self::Bls12381 { bytes }
+    }
+
+    /// Gets the C#-style interop object kind used for diagnostics and ordering.
+    #[must_use]
+    pub fn interface_type(&self) -> &str {
+        match self {
+            Self::Iterator { .. } => "StorageIterator",
+            Self::Bls12381 { bytes } => match bytes.len() {
+                48 => "G1Affine",
+                96 => "G2Affine",
+                576 => "Gt",
+                _ => "Bls12381Point",
+            },
+        }
+    }
+
+    /// Returns the storage iterator id if this interface carries one.
+    #[must_use]
+    pub const fn iterator_id(&self) -> Option<u32> {
+        match self {
+            Self::Iterator { id } => Some(*id),
+            Self::Bls12381 { .. } => None,
+        }
+    }
+
+    /// Returns the BLS12-381 point bytes if this interface carries one.
+    #[must_use]
+    pub fn bls12381_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Self::Bls12381 { bytes } => Some(bytes.as_slice()),
+            Self::Iterator { .. } => None,
+        }
+    }
+}
+
+const VM_INTEGER_MAX_SIZE: usize = 32;
+
+pub(crate) fn decode_integer_bytes(data: &[u8]) -> VmResult<BigInt> {
+    if data.len() > VM_INTEGER_MAX_SIZE {
+        return Err(VmError::invalid_type_simple("integer size exceeds maximum"));
+    }
+    Ok(BigInt::from_signed_bytes_le(data))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+enum CompoundIdentity {
+    Array(usize),
+    Struct(usize),
+    Map(usize),
+}
+
+fn compound_identity(item: &StackItem) -> Option<CompoundIdentity> {
+    match item {
+        StackItem::Array(array) => Some(CompoundIdentity::Array(array.id())),
+        StackItem::Struct(structure) => Some(CompoundIdentity::Struct(structure.id())),
+        StackItem::Map(map) => Some(CompoundIdentity::Map(map.id())),
+        _ => None,
+    }
+}
+
+mod equality;
+
+/// Represents a value in the Atipicial VM.
+#[derive(Debug, Clone)]
+pub enum StackItem {
+    /// Represents a null value.
+    Null,
+
+    /// Represents a boolean value.
+    Boolean(bool),
+
+    /// Represents an integer value.
+    Integer(VmInteger),
+
+    /// Represents an immutable byte string.
+    ///
+    /// Held behind an `Arc` so that cloning is a refcount bump rather than a
+    /// buffer copy. `ByteString` is immutable by definition in Atipicial, so sharing
+    /// the allocation is unobservable — and cloning happens on every `DUP`,
+    /// slot load, `peek`, and argument pass, i.e. per opcode. The mutable
+    /// counterpart (`Buffer`) keeps its own copy, which is why `SUBSTR`/`LEFT`/
+    /// `RIGHT` still allocate: they return `Buffer`, not `ByteString`.
+    ByteString(Arc<[u8]>),
+
+    /// Represents a mutable byte buffer.
+    Buffer(BufferItem),
+
+    /// Represents an array of stack items.
+    Array(ArrayItem),
+
+    /// Represents a struct of stack items.
+    Struct(StructItem),
+
+    /// Represents a map of stack items.
+    Map(MapItem),
+
+    /// Represents a pointer to a position in a script.
+    Pointer(PointerItem),
+
+    /// Represents an interop interface.
+    InteropInterface(Arc<InteropInterface>),
+}
+
+impl StackItem {
+    /// The singleton True value.
+    #[inline]
+    #[must_use]
+    pub const fn true_value() -> Self {
+        Self::Boolean(true)
+    }
+
+    /// The singleton False value.
+    #[inline]
+    #[must_use]
+    pub const fn false_value() -> Self {
+        Self::Boolean(false)
+    }
+
+    /// The singleton Null value.
+    #[inline]
+    #[must_use]
+    pub const fn null() -> Self {
+        Self::Null
+    }
+
+    /// Creates a boolean stack item.
+    #[inline]
+    #[must_use]
+    pub const fn from_bool(value: bool) -> Self {
+        Self::Boolean(value)
+    }
+
+    /// Creates an integer stack item.
+    #[inline]
+    pub fn from_int<T: Into<BigInt>>(value: T) -> Self {
+        Self::Integer(VmInteger::from_bigint(value.into()))
+    }
+
+    /// Creates an integer stack item from an i64 without heap allocation.
+    #[inline]
+    pub fn from_i64(value: i64) -> Self {
+        Self::Integer(VmInteger::Small(value))
+    }
+
+    /// Creates a byte string stack item.
+    ///
+    /// Accepts anything convertible into a shared byte buffer, so callers that
+    /// already hold an `Arc<[u8]>` (e.g. a cached instruction operand) pay only
+    /// a refcount bump instead of a copy.
+    #[inline]
+    pub fn from_byte_string<T: Into<Arc<[u8]>>>(value: T) -> Self {
+        Self::ByteString(value.into())
+    }
+
+    /// Creates a buffer stack item.
+    #[inline]
+    pub fn from_buffer<T: Into<Vec<u8>>>(value: T) -> Self {
+        Self::Buffer(BufferItem::new(value.into()))
+    }
+
+    /// Creates an array stack item.
+    #[inline]
+    pub fn from_array(value: Vec<Self>) -> Self {
+        Self::Array(ArrayItem::new_untracked(value))
+    }
+
+    /// Creates a struct stack item.
+    #[inline]
+    pub fn from_struct(value: Vec<Self>) -> Self {
+        Self::Struct(StructItem::new_untracked(value))
+    }
+
+    /// Creates a map stack item.
+    #[inline]
+    pub fn from_map<T: Into<VmOrderedDictionary<Self, Self>>>(value: T) -> Self {
+        Self::Map(MapItem::new_untracked(value.into()))
+    }
+
+    /// Creates a pointer stack item.
+    #[inline]
+    #[must_use]
+    pub fn from_pointer(script: Arc<Script>, position: usize) -> Self {
+        Self::Pointer(PointerItem::new(script, position))
+    }
+
+    /// Creates an interop interface stack item.
+    #[inline]
+    pub fn from_interface(value: InteropInterface) -> Self {
+        Self::InteropInterface(Arc::new(value))
+    }
+
+    /// Ensures any compound stack items share the provided reference counter.
+    ///
+    /// This is required for C# parity: all compound VM objects are expected to
+    /// belong to the engine's `ReferenceCounter`. Host-provided stack items may
+    /// be constructed without a counter and are attached when they enter the VM.
+    pub fn attach_reference_counter(&mut self, rc: &ReferenceCounter) -> VmResult<()> {
+        match self {
+            Self::Array(array) => array.attach_reference_counter(rc),
+            Self::Struct(structure) => structure.attach_reference_counter(rc),
+            Self::Map(map) => map.attach_reference_counter(rc),
+            _ => Ok(()),
+        }
+    }
+
+    /// Returns the type of the stack item.
+    #[inline]
+    #[must_use]
+    pub const fn stack_item_type(&self) -> StackItemType {
+        match self {
+            Self::Null => StackItemType::Any,
+            Self::Boolean(_) => StackItemType::Boolean,
+            Self::Integer(_) => StackItemType::Integer,
+            Self::ByteString(_) => StackItemType::ByteString,
+            Self::Buffer(_) => StackItemType::Buffer,
+            Self::Array(_) => StackItemType::Array,
+            Self::Struct(_) => StackItemType::Struct,
+            Self::Map(_) => StackItemType::Map,
+            Self::Pointer(_) => StackItemType::Pointer,
+            Self::InteropInterface(_) => StackItemType::InteropInterface,
+        }
+    }
+
+    /// Returns true if the stack item is null.
+    #[inline]
+    #[must_use]
+    pub const fn is_null(&self) -> bool {
+        matches!(self, Self::Null)
+    }
+
+    /// Converts the stack item to a boolean.
+    #[inline]
+    pub fn as_bool(&self) -> VmResult<bool> {
+        match self {
+            Self::Null => Ok(false),
+            Self::Boolean(value) => Ok(*value),
+            Self::Integer(value) => Ok(!value.is_zero()),
+            Self::ByteString(b) => {
+                if b.len() > VM_INTEGER_MAX_SIZE {
+                    return Err(VmError::invalid_type_simple(
+                        "Cannot convert ByteString to Boolean",
+                    ));
+                }
+                // AtipicialVM truthiness: true iff any byte is non-zero (matches
+                // C# Unsafe.NotZero) without cloning the byte string.
+                Ok(b.iter().any(|byte| *byte != 0))
+            }
+            Self::Buffer(_b) => Ok(true),
+            Self::Array(_a) => Ok(true),
+            Self::Struct(_s) => Ok(true),
+            Self::Map(_m) => Ok(true),
+            Self::Pointer(_pointer) => Ok(true),
+            Self::InteropInterface(_i) => Ok(true),
+        }
+    }
+
+    /// Converts the stack item to an integer (borrowing).
+    #[inline]
+    pub fn as_int(&self) -> VmResult<BigInt> {
+        match self {
+            Self::Null => Err(VmError::invalid_type_simple(
+                "Cannot convert Null to Integer",
+            )),
+            Self::Boolean(b) => Ok(BigInt::from(i32::from(*b))),
+            Self::Integer(i) => Ok(i.to_bigint()),
+            Self::ByteString(b) => Self::bytestring_to_bigint(b),
+            Self::Buffer(buf) => {
+                if buf.len() > VM_INTEGER_MAX_SIZE {
+                    return Err(VmError::invalid_type_simple(
+                        "Cannot convert Buffer to Integer",
+                    ));
+                }
+                if buf.is_empty() {
+                    return Ok(BigInt::from(0));
+                }
+                buf.with_data(Self::bytes_to_bigint)
+            }
+            _ => Err(VmError::invalid_type_simple("Cannot convert to Integer")),
+        }
+    }
+
+    /// Consuming version of `as_int` — moves the BigInt out of an Integer
+    /// variant instead of cloning. Use when the StackItem is already owned
+    /// (e.g., after `pop()`).
+    #[inline]
+    pub fn into_int(self) -> VmResult<BigInt> {
+        match self {
+            Self::Null => Err(VmError::invalid_type_simple(
+                "Cannot convert Null to Integer",
+            )),
+            Self::Boolean(b) => Ok(BigInt::from(i32::from(b))),
+            Self::Integer(i) => Ok(i.into_bigint()), // MOVE — no clone for Small!
+            Self::ByteString(b) => Self::bytestring_to_bigint(&b),
+            Self::Buffer(buf) => {
+                if buf.len() > VM_INTEGER_MAX_SIZE {
+                    return Err(VmError::invalid_type_simple(
+                        "Cannot convert Buffer to Integer",
+                    ));
+                }
+                if buf.is_empty() {
+                    return Ok(BigInt::from(0));
+                }
+                buf.with_data(Self::bytes_to_bigint)
+            }
+            _ => Err(VmError::invalid_type_simple("Cannot convert to Integer")),
+        }
+    }
+
+    /// Shared helper: convert byte slice to BigInt with AtipicialVM integer rules.
+    fn bytes_to_bigint(data: &[u8]) -> VmResult<BigInt> {
+        decode_integer_bytes(data)
+    }
+
+    /// Shared helper: convert ByteString (Vec<u8>) to BigInt.
+    fn bytestring_to_bigint(b: &[u8]) -> VmResult<BigInt> {
+        if b.len() > VM_INTEGER_MAX_SIZE {
+            return Err(VmError::invalid_type_simple(
+                "Cannot convert ByteString to Integer",
+            ));
+        }
+        if b.is_empty() {
+            return Ok(BigInt::from(0));
+        }
+        Self::bytes_to_bigint(b)
+    }
+
+    /// Returns the boolean value represented by the stack item.
+    #[inline]
+    pub fn as_boolean(&self) -> VmResult<bool> {
+        self.as_bool()
+    }
+
+    /// Returns the integer value represented by the stack item.
+    #[inline]
+    pub fn as_integer(&self) -> VmResult<BigInt> {
+        self.as_int()
+    }
+
+    /// Returns the pointer represented by the stack item.
+    pub fn get_pointer(&self) -> VmResult<PointerItem> {
+        match self {
+            Self::Pointer(pointer) => Ok(pointer.clone()),
+            _ => Err(VmError::invalid_type_simple(
+                "Cannot convert stack item to pointer",
+            )),
+        }
+    }
+
+    /// Converts the stack item to a byte array.
+    #[inline]
+    pub fn as_bytes(&self) -> VmResult<Vec<u8>> {
+        match self {
+            Self::Null => Ok(Vec::new()),
+            Self::Boolean(value) => Ok(vec![u8::from(*value)]),
+            Self::Integer(value) => Ok(value
+                .to_i64()
+                .map_or_else(|| value.to_signed_bytes_le(), crate::encode_integer)),
+            Self::ByteString(bytes) => Ok(bytes.to_vec()),
+            Self::Buffer(buffer) => Ok(buffer.data()),
+            _ => Err(VmError::invalid_type_simple("Cannot convert to ByteArray")),
+        }
+    }
+
+    /// Consuming version of `as_bytes`. Use when the StackItem is already owned
+    /// (e.g. after `pop()`).
+    ///
+    /// Since `ByteString` now shares its buffer, this copies rather than moves:
+    /// an `Arc<[u8]>` cannot be unwrapped into a `Vec` even at refcount 1
+    /// because the payload is unsized. Prefer [`into_byte_string`](Self::into_byte_string)
+    /// when a shared buffer is acceptable — it stays allocation-free.
+    #[inline]
+    pub fn into_bytes(self) -> VmResult<Vec<u8>> {
+        match self {
+            Self::Null => Ok(Vec::new()),
+            Self::Boolean(value) => Ok(vec![u8::from(value)]),
+            Self::Integer(value) => Ok(value
+                .to_i64()
+                .map_or_else(|| value.to_signed_bytes_le(), crate::encode_integer)),
+            Self::ByteString(bytes) => Ok(bytes.to_vec()),
+            Self::Buffer(buffer) => Ok(buffer.data()),
+            _ => Err(VmError::invalid_type_simple("Cannot convert to ByteArray")),
+        }
+    }
+
+    /// Consuming accessor that preserves buffer sharing for `ByteString`.
+    ///
+    /// This is the allocation-free counterpart to [`into_bytes`](Self::into_bytes):
+    /// a `ByteString` yields its existing `Arc` and every other convertible
+    /// variant allocates exactly once, as it would have anyway.
+    #[inline]
+    pub fn into_byte_string(self) -> VmResult<Arc<[u8]>> {
+        match self {
+            Self::ByteString(bytes) => Ok(bytes),
+            other => other.into_bytes().map(Arc::from),
+        }
+    }
+
+    /// Returns a borrowed byte slice for variants that own contiguous bytes
+    /// (`ByteString`). For other convertible variants the caller should fall
+    /// back to [`as_bytes`](Self::as_bytes).
+    ///
+    /// This avoids the `Vec` allocation that `as_bytes()` performs, which is
+    /// significant in hot paths like map key validation.
+    #[inline]
+    pub fn as_bytes_ref(&self) -> Option<&[u8]> {
+        match self {
+            Self::ByteString(b) => Some(&b[..]),
+            _ => None,
+        }
+    }
+
+    /// Converts the stack item to an array.
+    pub fn as_array(&self) -> VmResult<Vec<Self>> {
+        match self {
+            Self::Array(a) => Ok(a.items()),
+            Self::Struct(s) => Ok(s.items()),
+            _ => Err(VmError::invalid_type_simple("Cannot convert to Array")),
+        }
+    }
+
+    /// Converts the stack item to a map.
+    pub fn as_map(&self) -> VmResult<VmOrderedDictionary<Self, Self>> {
+        match self {
+            Self::Map(m) => Ok(m.items()),
+            _ => Err(VmError::invalid_type_simple("Cannot convert to Map")),
+        }
+    }
+
+    /// Gets the interop interface from the stack item.
+    pub fn as_interface(&self) -> VmResult<&InteropInterface> {
+        match self {
+            Self::InteropInterface(i) => Ok(i.as_ref()),
+            _ => Err(VmError::invalid_type_simple(
+                "Stack item is not an InteropInterface",
+            )),
+        }
+    }
+
+    /// Creates a deep clone of the stack item.
+    #[must_use]
+    pub fn deep_clone(&self) -> Self {
+        self.deep_clone_with_refs(&mut std::collections::HashMap::new())
+    }
+
+    /// Creates a deep copy respecting execution limits (mirrors C# behaviour).
+    pub fn deep_copy(&self, limits: &ExecutionEngineLimits) -> VmResult<Self> {
+        match self {
+            Self::Struct(structure) => {
+                let cloned = structure.clone_with_limits(limits)?;
+                Ok(Self::Struct(cloned))
+            }
+            Self::Array(array) => {
+                let copy = array.deep_copy(array.reference_counter())?;
+                Ok(Self::Array(copy))
+            }
+            Self::Map(map) => {
+                let copy = map.deep_copy(map.reference_counter())?;
+                Ok(Self::Map(copy))
+            }
+            _ => Ok(self.deep_clone()),
+        }
+    }
+
+    /// Creates a deep clone of the stack item with reference tracking to handle cycles.
+    fn deep_clone_with_refs(
+        &self,
+        refs: &mut std::collections::HashMap<CompoundIdentity, Self>,
+    ) -> Self {
+        if let Some(self_id) = compound_identity(self) {
+            if let Some(cloned) = refs.get(&self_id) {
+                return cloned.clone();
+            }
+        }
+
+        // Clone the item based on its type
+        let result = match self {
+            Self::Null => Self::Null,
+            Self::Boolean(b) => Self::Boolean(*b),
+            Self::Integer(i) => Self::Integer(i.clone()),
+            Self::ByteString(b) => Self::ByteString(b.clone()),
+            Self::Buffer(b) => Self::Buffer(BufferItem::new(b.data())),
+            Self::Pointer(p) => Self::Pointer(p.clone()),
+            Self::InteropInterface(i) => Self::InteropInterface(i.clone()),
+
+            Self::Array(a) => {
+                let cloned_array = ArrayItem::new_untracked(Vec::new());
+                let cloned_item = Self::Array(cloned_array.clone());
+                if let Some(self_id) = compound_identity(self) {
+                    refs.insert(self_id, cloned_item.clone());
+                }
+                for item in a.items() {
+                    let child = item.deep_clone_with_refs(refs);
+                    let _ = cloned_array.push(child);
+                }
+                cloned_item
+            }
+            Self::Struct(s) => {
+                let cloned_struct = StructItem::new_untracked(Vec::new());
+                let cloned_item = Self::Struct(cloned_struct.clone());
+                if let Some(self_id) = compound_identity(self) {
+                    refs.insert(self_id, cloned_item.clone());
+                }
+                for item in s.items() {
+                    let child = item.deep_clone_with_refs(refs);
+                    let _ = cloned_struct.push(child);
+                }
+                cloned_item
+            }
+            Self::Map(m) => {
+                let cloned_map = MapItem::new_untracked(VmOrderedDictionary::new());
+                let cloned_item = Self::Map(cloned_map.clone());
+                if let Some(self_id) = compound_identity(self) {
+                    refs.insert(self_id, cloned_item.clone());
+                }
+                for (k, v) in m.items().iter() {
+                    let key = k.deep_clone_with_refs(refs);
+                    let value = v.deep_clone_with_refs(refs);
+                    let _ = cloned_map.set(key, value);
+                }
+                cloned_item
+            }
+        };
+
+        if let Some(self_id) = compound_identity(self) {
+            refs.insert(self_id, result.clone());
+        }
+
+        result
+    }
+
+    /// Clears all references to other stack items.
+    pub fn clear_references(&mut self) {
+        match self {
+            Self::Array(array) => {
+                let _ = array.clear();
+            }
+            Self::Struct(structure) => {
+                let _ = structure.clear();
+            }
+            Self::Map(map) => {
+                let _ = map.clear();
+            }
+            _ => {}
+        }
+    }
+
+    /// Computes a deterministic hash code compatible with the C# implementation.
+    #[must_use]
+    pub fn hash_code(&self) -> i32 {
+        match self {
+            Self::Null => 0,
+            Self::Boolean(b) => i32::from(*b),
+            Self::Integer(i) => hash_bytes(&i.to_signed_bytes_le()), // VmInteger has this method
+            Self::ByteString(b) => hash_bytes(b),
+            Self::Buffer(b) => b.with_data(hash_bytes),
+            Self::Array(array) => {
+                let mut hash = combine_hash(17, array.len() as i32);
+                for item in array {
+                    hash = combine_hash(hash, item.hash_code());
+                }
+                hash
+            }
+            Self::Struct(structure) => {
+                let mut hash = combine_hash(17, structure.len() as i32);
+                for item in structure.items() {
+                    hash = combine_hash(hash, item.hash_code());
+                }
+                hash
+            }
+            Self::Map(map) => {
+                let mut hash = combine_hash(17, map.len() as i32);
+                for (key, value) in map.items().iter() {
+                    hash = combine_hash(hash, key.hash_code());
+                    hash = combine_hash(hash, value.hash_code());
+                }
+                hash
+            }
+            Self::Pointer(pointer) => {
+                // Use the script's deterministic hash code instead of memory address
+                let script_hash = pointer.script().hash_code();
+                let mut hash = 17;
+                hash = combine_hash(hash, (script_hash & 0xFFFF_FFFF) as i32);
+                hash = combine_hash(hash, ((script_hash >> 32) & 0xFFFF_FFFF) as i32);
+                hash = combine_hash(hash, pointer.position() as i32);
+                hash
+            }
+            Self::InteropInterface(interface) => {
+                // Use the interface type name's hash for deterministic interop interface hashing.
+                // This ensures that different interop interface types have different hash codes.
+                let type_name = interface.interface_type();
+                let mut hasher = DefaultHasher::new();
+                type_name.hash(&mut hasher);
+                let hash = hasher.finish();
+                let mut h = 17;
+                h = combine_hash(h, (hash & 0xFFFF_FFFF) as i32);
+                h = combine_hash(h, ((hash >> 32) & 0xFFFF_FFFF) as i32);
+                h
+            }
+        }
+    }
+
+    /// Converts the stack item to the specified type.
+    pub fn convert_to(&self, item_type: StackItemType) -> VmResult<Self> {
+        // Atipicial.VM Null.ConvertTo preserves Null for every defined non-Any type.
+        // Handle it before the same-type fast path because Null's runtime type
+        // is Any, and converting Null to Any must fault.
+        if matches!(self, Self::Null) {
+            return if item_type == StackItemType::Any {
+                Err(VmError::invalid_type_simple(
+                    "Null cannot be converted to Any",
+                ))
+            } else {
+                Ok(Self::Null)
+            };
+        }
+
+        if self.stack_item_type() == item_type {
+            return Ok(self.clone());
+        }
+
+        match item_type {
+            StackItemType::Boolean => Ok(Self::Boolean(self.as_bool()?)),
+            StackItemType::Integer => Ok(Self::Integer(VmInteger::from_bigint(self.as_int()?))),
+            StackItemType::ByteString => Ok(Self::ByteString(Arc::from(self.as_bytes()?))),
+            StackItemType::Buffer => Ok(Self::Buffer(BufferItem::new(self.as_bytes()?))),
+            _ => Err(VmError::invalid_type_simple(format!(
+                "Cannot convert to {item_type:?}"
+            ))),
+        }
+    }
+}
+
+// Implement PartialEq to allow stack items to be compared and used as keys in collections
+impl PartialEq for StackItem {
+    fn eq(&self, other: &Self) -> bool {
+        self.equals(other).unwrap_or(false)
+    }
+}
+
+impl Eq for StackItem {}
+
+// Implement PartialOrd and Ord to allow stack items to be used as keys in BTreeMap
+// Production-ready implementation matching C# StackItem comparison exactly
+impl PartialOrd for StackItem {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for StackItem {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Production-ready ordering based on C# stack_item comparison rules
+        // 1. First compare by type (matches C# stack_item type hierarchy)
+        let type_order = self
+            .stack_item_type()
+            .to_byte()
+            .cmp(&other.stack_item_type().to_byte());
+        if type_order != std::cmp::Ordering::Equal {
+            return type_order;
+        }
+
+        // 2. Compare values within the same type
+        match (self, other) {
+            (Self::Null, Self::Null) => std::cmp::Ordering::Equal,
+            (Self::Boolean(a), Self::Boolean(b)) => a.cmp(b),
+            (Self::Integer(a), Self::Integer(b)) => a.cmp(b),
+            (Self::ByteString(a), Self::ByteString(b)) => a.cmp(b),
+            (Self::Buffer(a), Self::Buffer(b)) => a.cmp(b),
+            (Self::ByteString(a), Self::Buffer(b)) => b.with_data(|data| a[..].cmp(data)),
+            (Self::Buffer(a), Self::ByteString(b)) => a.with_data(|data| data.cmp(&b[..])),
+            (Self::Pointer(a), Self::Pointer(b)) => a.cmp(b),
+            (Self::Array(a), Self::Array(b)) => cmp_stack_item_sequences(a.iter(), b.iter()),
+            (Self::Struct(a), Self::Struct(b)) => cmp_stack_item_sequences(a.iter(), b.iter()),
+            (Self::Map(a), Self::Map(b)) => {
+                // Compare maps by size first, then by sorted key-value pairs
+                let len_cmp = a.len().cmp(&b.len());
+                if len_cmp != std::cmp::Ordering::Equal {
+                    return len_cmp;
+                }
+
+                let a_items = a.items();
+                let b_items = b.items();
+                let mut a_pairs: Vec<_> = a_items.iter().collect();
+                let mut b_pairs: Vec<_> = b_items.iter().collect();
+                a_pairs.sort_by(|x, y| x.0.cmp(y.0));
+                b_pairs.sort_by(|x, y| x.0.cmp(y.0));
+
+                for ((key_a, val_a), (key_b, val_b)) in a_pairs.iter().zip(b_pairs.iter()) {
+                    let key_cmp = key_a.cmp(key_b);
+                    if key_cmp != std::cmp::Ordering::Equal {
+                        return key_cmp;
+                    }
+                    let val_cmp = val_a.cmp(val_b);
+                    if val_cmp != std::cmp::Ordering::Equal {
+                        return val_cmp;
+                    }
+                }
+                std::cmp::Ordering::Equal
+            }
+            (Self::InteropInterface(a), Self::InteropInterface(b)) => {
+                // Compare interop interfaces by their concrete type name.
+                // Without a Comparable trait on InteropInterface, two instances
+                // of the same type cannot be meaningfully ordered — we return
+                // Equal for same-type interops. This is acceptable because
+                // InteropInterface items are never stored in sorted collections
+                // that require total ordering (maps use a different comparison).
+                a.interface_type().cmp(b.interface_type())
+            }
+            _ => {
+                // All StackItemType variants have distinct type bytes, so this arm
+                // is unreachable in practice. Use a deterministic fallback based on
+                // variant discriminant rather than incorrectly returning Equal.
+                // debug_assert! would fire here in dev builds to catch missing arms.
+                debug_assert!(
+                    false,
+                    "StackItem::cmp: unhandled variant combination (types {:?} vs {:?})",
+                    self.stack_item_type(),
+                    other.stack_item_type()
+                );
+                variant_discriminant(self).cmp(&variant_discriminant(other))
+            }
+        }
+    }
+}
+
+fn cmp_stack_item_sequences(
+    left: impl ExactSizeIterator<Item = StackItem>,
+    right: impl ExactSizeIterator<Item = StackItem>,
+) -> std::cmp::Ordering {
+    let len_cmp = left.len().cmp(&right.len());
+    if len_cmp != std::cmp::Ordering::Equal {
+        return len_cmp;
+    }
+
+    for (item_a, item_b) in left.zip(right) {
+        let item_cmp = item_a.cmp(&item_b);
+        if item_cmp != std::cmp::Ordering::Equal {
+            return item_cmp;
+        }
+    }
+    std::cmp::Ordering::Equal
+}
+
+const fn combine_hash(current: i32, value: i32) -> i32 {
+    current.wrapping_mul(397).wrapping_add(value)
+}
+
+/// Returns a deterministic ordering index for each `StackItem` variant.
+///
+/// Used as a fallback in `Ord::cmp` when variant combinations are not
+/// explicitly handled. The values correspond to the variant's `StackItemType`
+/// byte, ensuring consistency with the type-based ordering used by `cmp()`.
+const fn variant_discriminant(item: &StackItem) -> u8 {
+    match item {
+        StackItem::Null => 0x00,
+        StackItem::Boolean(_) => 0x01,
+        StackItem::Integer(_) => 0x02,
+        StackItem::ByteString(_) => 0x03,
+        StackItem::Buffer(_) => 0x04,
+        StackItem::Array(_) => 0x05,
+        StackItem::Struct(_) => 0x06,
+        StackItem::Map(_) => 0x07,
+        StackItem::Pointer(_) => 0x08,
+        StackItem::InteropInterface(_) => 0x09,
+    }
+}
+
+fn hash_bytes(bytes: &[u8]) -> i32 {
+    bytes
+        .iter()
+        .fold(17, |hash, byte| combine_hash(hash, i32::from(*byte)))
+}
+
+#[cfg(test)]
+#[path = "../tests/stack_item/stack_item.rs"]
+mod tests;

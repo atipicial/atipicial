@@ -1,0 +1,22 @@
+[package]
+name = "atipicial-test-fixtures"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Shared test fixtures (transactions, blocks, store helpers) for Atipicial workspace integration tests"
+
+[dependencies]
+atipicial-config = { workspace = true }
+atipicial-error = { workspace = true }
+atipicial-primitives = { workspace = true }
+atipicial-payloads = { workspace = true }
+atipicial-storage = { workspace = true }
+atipicial-crypto = { workspace = true }
+atipicial-native-contracts = { workspace = true }
+atipicial-vm = { workspace = true }
+atipicial-io = { workspace = true }
+
+[lints]
+workspace = true

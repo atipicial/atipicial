@@ -1,0 +1,625 @@
+use std::sync::Arc;
+
+use hyper::header::CONTENT_TYPE;
+use hyper::{Body, Request, StatusCode};
+use atipicial_storage::persistence::Store;
+use atipicial_storage::persistence::providers::memory_store::MemoryStore;
+
+use super::super::config::{TELEMETRY_HEALTH_PATH, TELEMETRY_READY_PATH};
+use super::super::services::NodeServiceHandles;
+use super::exporter::MetricsExporter;
+use super::http::serve_metrics_request;
+
+fn test_node() -> Arc<atipicial_system::Node> {
+    Arc::new(atipicial_system::Node::for_test(
+        atipicial_config::AtipicialChainSpec::testnet().expect("valid TestNet chain spec"),
+    ))
+}
+
+fn native_provider() -> Arc<atipicial_native_contracts::StandardNativeProvider> {
+    Arc::new(atipicial_native_contracts::StandardNativeProvider::new())
+}
+
+fn memory_pool(
+    chain_spec: Arc<atipicial_config::AtipicialChainSpec>,
+    native_contract_provider: Arc<atipicial_native_contracts::StandardNativeProvider>,
+) -> atipicial_mempool::MemoryPool {
+    atipicial_mempool::MemoryPool::new_with_native_contract_provider(
+        chain_spec,
+        atipicial_mempool::TxPoolConfig::default(),
+        native_contract_provider,
+    )
+}
+
+fn mdbx_test_node(
+    map_size: isize,
+) -> (
+    Arc<
+        atipicial_system::Node<
+            atipicial_native_contracts::StandardNativeProvider,
+            atipicial_storage::mdbx::MdbxStore,
+        >,
+    >,
+    tempfile::TempDir,
+) {
+    use atipicial_blockchain::HeaderCache;
+    use atipicial_network::NetworkHandle;
+    use atipicial_storage::mdbx::MdbxStoreProvider;
+    use atipicial_storage::persistence::storage::StorageConfig;
+
+    let tmp = tempfile::TempDir::new().expect("tempdir");
+    let chain_spec = atipicial_config::AtipicialChainSpec::testnet().expect("valid TestNet chain spec");
+    let storage: Arc<atipicial_storage::mdbx::MdbxStore> = Arc::new(
+        MdbxStoreProvider::new(StorageConfig {
+            path: tmp.path().join("telemetry-mdbx"),
+            mdbx_geometry_upper_bytes: Some(map_size),
+            ..Default::default()
+        })
+        .get_mdbx_store(std::path::Path::new(""))
+        .expect("mdbx store"),
+    );
+    let native_contract_provider = native_provider();
+    let (blockchain, _rx) = atipicial_blockchain::BlockchainHandle::with_capacity();
+    let (network, _nrx, _etx) = NetworkHandle::channel(8, 8);
+    let mempool = Arc::new(memory_pool(
+        Arc::clone(&chain_spec),
+        Arc::clone(&native_contract_provider),
+    ));
+    let node = atipicial_system::NodeBuilder::new(
+        chain_spec,
+        storage,
+        blockchain,
+        network,
+        mempool,
+        Arc::new(HeaderCache::default()),
+        native_contract_provider,
+    )
+    .build();
+    (Arc::new(node), tmp)
+}
+
+fn empty_services<S: Store>() -> Arc<NodeServiceHandles<S>> {
+    Arc::new(NodeServiceHandles::empty())
+}
+
+fn service_handles<S: Store>(
+    indexer: Option<Arc<atipicial_indexer::IndexerService>>,
+    remote_ledger: Option<Arc<super::super::remote_ledger::RemoteLedgerStatus>>,
+) -> Arc<NodeServiceHandles<S>> {
+    Arc::new(NodeServiceHandles::new(
+        None,
+        None,
+        indexer,
+        None,
+        None,
+        remote_ledger,
+    ))
+}
+
+fn remote_ledger_node(
+    height: u32,
+) -> (Arc<atipicial_system::Node>, Arc<NodeServiceHandles<MemoryStore>>) {
+    remote_ledger_node_with_height(Some(height))
+}
+
+fn remote_ledger_node_with_height(
+    height: Option<u32>,
+) -> (Arc<atipicial_system::Node>, Arc<NodeServiceHandles<MemoryStore>>) {
+    let node = test_node();
+    let services = service_handles(
+        None,
+        Some(Arc::new(
+            super::super::remote_ledger::RemoteLedgerStatus::new(
+                "https://rpc.example.invalid",
+                height,
+            ),
+        )),
+    );
+    (node, services)
+}
+
+fn remote_ledger_node_with_error(
+    error: &str,
+) -> (Arc<atipicial_system::Node>, Arc<NodeServiceHandles<MemoryStore>>) {
+    let node = test_node();
+    let services = service_handles(
+        None,
+        Some(Arc::new(
+            super::super::remote_ledger::RemoteLedgerStatus::unavailable(
+                "https://rpc.example.invalid",
+                error,
+            ),
+        )),
+    );
+    (node, services)
+}
+
+fn seed_ledger_height(node: &atipicial_system::Node, height: u32) {
+    let pointer = atipicial_native_contracts::LedgerContract::new()
+        .serialize_hash_index_state(&atipicial_primitives::UInt256::zero(), height)
+        .expect("serialize current ledger pointer");
+    let mut store = node.store_cache();
+    store.add(
+        atipicial_storage::StorageKey::new(atipicial_native_contracts::LedgerContract::ID, vec![12]),
+        atipicial_storage::StorageItem::from_bytes(pointer),
+    );
+    store
+        .try_commit()
+        .expect("commit telemetry-test Ledger height");
+}
+
+fn indexed_service_at(height: u32) -> Arc<atipicial_indexer::IndexerService> {
+    let indexer = Arc::new(atipicial_indexer::IndexerService::new());
+    let mut header = atipicial_payloads::Header::new();
+    header.set_index(height);
+    indexer
+        .index_block(&atipicial_payloads::Block::from_parts(header, Vec::new()))
+        .expect("index block");
+    indexer
+}
+
+#[test]
+fn metrics_exporter_uses_observability_ledger_provider() {
+    let source = include_str!("../../../../node/telemetry/exporter.rs");
+
+    assert!(
+        source.contains("observability_ledger_height"),
+        "metrics exporter should share observability ledger-height resolution"
+    );
+    assert!(
+        !source.contains("StorageLedgerProviderFactory"),
+        "metrics exporter should not construct storage ledger providers directly"
+    );
+}
+
+#[test]
+fn renders_mdbx_environment_metrics() {
+    const MAP_SIZE: isize = 128 * 1024 * 1024;
+    let (node, _tmp) = mdbx_test_node(MAP_SIZE);
+    let exporter = MetricsExporter::new(node, empty_services()).expect("metrics exporter");
+
+    let payload = exporter.render().expect("metrics payload");
+    let text = String::from_utf8(payload).expect("utf8 metrics");
+
+    assert!(text.contains(&format!("atipicial_storage_mdbx_map_size_bytes {MAP_SIZE}")));
+    assert!(text.contains("atipicial_storage_mdbx_last_page_number"));
+    assert!(text.contains("atipicial_storage_mdbx_last_transaction_id"));
+    assert!(text.contains("atipicial_storage_mdbx_max_readers"));
+    assert!(text.contains("atipicial_storage_mdbx_reader_slots_used"));
+}
+
+#[test]
+fn renders_node_metrics_payload() {
+    let node = test_node();
+    let exporter = MetricsExporter::new(node, empty_services()).expect("metrics exporter");
+
+    let payload = exporter.render().expect("metrics payload");
+    let text = String::from_utf8(payload).expect("utf8 metrics");
+
+    assert!(text.contains("atipicial_node_up 1"));
+    assert!(text.contains("atipicial_node_info"));
+    assert!(text.contains("network=\"0x3554334E\""));
+    assert!(text.contains("atipicial_node_mempool_transactions 0"));
+    assert!(text.contains("atipicial_node_service_enabled{service=\"indexer\"} 0"));
+    assert!(text.contains("atipicial_node_indexer_up 0"));
+    assert!(text.contains("atipicial_node_indexer_indexed_height -1"));
+    assert!(text.contains("atipicial_node_indexer_blocks_behind -1"));
+    assert!(text.contains("atipicial_node_indexer_synced 0"));
+    assert!(text.contains("atipicial_sync_native_persist_blocks_total"));
+    assert!(text.contains("atipicial_sync_native_persist_avg_onpersist_us"));
+    assert!(text.contains("atipicial_sync_native_persist_avg_tx_us"));
+    assert!(text.contains("atipicial_sync_native_persist_avg_cache_commit_us"));
+    assert!(text.contains("atipicial_sync_native_contract_hook_calls_total"));
+    assert!(text.contains(
+        "atipicial_sync_native_contract_hook_avg_us{trigger=\"onpersist\",contract=\"AtipicialDollar\",id=\"-6\"}"
+    ));
+    assert!(text.contains("atipicial_sync_native_persist_tx_stage_calls_total"));
+    assert!(text.contains("atipicial_sync_native_persist_tx_stage_total_us{stage=\"load_execute\"}"));
+    assert!(text.contains("atipicial_sync_native_persist_tx_stage_avg_us{stage=\"load_execute\"}"));
+    assert!(text.contains("atipicial_sync_atipicialtoken_onpersist_stage_calls_total"));
+    assert!(text.contains("atipicial_sync_atipicialtoken_onpersist_stage_avg_us{stage=\"compute_committee\"}"));
+    assert!(text.contains("atipicial_sync_atipicialtoken_committee_compute_stage_calls_total"));
+    assert!(text.contains(
+        "atipicial_sync_atipicialtoken_committee_compute_stage_avg_us{stage=\"candidate_state_decode\"}"
+    ));
+    assert!(text.contains(
+        "atipicial_sync_atipicialtoken_committee_compute_stage_avg_us{stage=\"candidate_blocked_prefetch\"}"
+    ));
+    assert!(text.contains("atipicial_sync_atipicialtoken_committee_candidate_scan_items_total"));
+    assert!(text.contains(
+        "atipicial_sync_atipicialtoken_committee_candidate_scan_avg_items{kind=\"eligible_candidates\"}"
+    ));
+    assert!(text.contains("atipicial_state_service_mpt_apply_blocks_total"));
+    assert!(text.contains("atipicial_state_service_mpt_apply_avg_total_us"));
+    assert!(text.contains("atipicial_state_service_mpt_apply_avg_changes"));
+    assert!(text.contains("atipicial_state_service_mpt_apply_stage_calls_total"));
+    assert!(text.contains("atipicial_state_service_mpt_apply_stage_avg_us{stage=\"queue_wait\"}"));
+    assert!(
+        text.contains("atipicial_state_service_mpt_apply_stage_duration_us_total{stage=\"queue_wait\"}")
+    );
+    assert!(text.contains("atipicial_state_service_mpt_apply_stage_avg_us{stage=\"enqueue_blocking\"}"));
+    assert!(text.contains("atipicial_state_service_mpt_apply_stage_avg_us{stage=\"trie_commit\"}"));
+    assert!(text.contains("atipicial_state_service_mpt_apply_stage_avg_us{stage=\"backing_sort\"}"));
+    assert!(text.contains("atipicial_state_service_mpt_apply_items_total"));
+    assert!(text.contains("atipicial_state_service_mpt_apply_avg_items{kind=\"overlay_entries\"}"));
+    assert!(text.contains("atipicial_state_service_mpt_apply_avg_items{kind=\"batch_blocks\"}"));
+    for kind in [
+        "node_puts",
+        "node_deletes",
+        "node_value_size_0_64",
+        "node_value_size_65_128",
+        "node_value_size_129_256",
+        "node_value_size_257_512",
+        "node_value_size_513_1024",
+        "node_value_size_1025_4096",
+        "node_value_size_4097_16384",
+        "node_value_size_over_16384",
+        "node_value_bytes_0_64",
+        "node_value_bytes_65_128",
+        "node_value_bytes_129_256",
+        "node_value_bytes_257_512",
+        "node_value_bytes_513_1024",
+        "node_value_bytes_1025_4096",
+        "node_value_bytes_4097_16384",
+        "node_value_bytes_over_16384",
+        "put_node_cached_calls",
+        "serialized_payload_bytes",
+        "hash_computations",
+        "max_recursion_depth",
+        "repeated_ancestor_finalizations",
+        "trie_resolve_cache_hits",
+        "trie_resolve_store_hits",
+        "trie_resolve_store_misses",
+        "deferred_finalization_read_bytes",
+        "deferred_finalization_minor_faults",
+        "deferred_finalization_major_faults",
+        "overlay_working_set_entries",
+        "finalization_cache_hits",
+        "finalization_memory_hits",
+        "finalization_memory_misses",
+        "finalization_backing_hits",
+        "finalization_backing_misses",
+        "finalization_lookup_errors",
+    ] {
+        assert!(
+            text.contains(&format!(
+                "atipicial_state_service_mpt_apply_avg_items{{kind=\"{kind}\"}}"
+            )),
+            "missing MPT mutation metric kind {kind}"
+        );
+    }
+    assert!(text.contains("atipicial_storage_mdbx_commit_attempts_total"));
+    assert!(
+        text.contains("atipicial_storage_mdbx_commit_stage_duration_us_total{stage=\"cursor_write\"}")
+    );
+    assert!(text.contains("atipicial_storage_mdbx_commit_volume_total{kind=\"value_bytes\"}"));
+    assert!(text.contains("atipicial_storage_mdbx_commit_volume_total{kind=\"value_size_0_64\"}"));
+}
+
+#[test]
+fn renders_indexer_service_metrics_when_registered() {
+    let node = test_node();
+    let services = service_handles(Some(Arc::new(atipicial_indexer::IndexerService::new())), None);
+    let exporter = MetricsExporter::new(node, services).expect("metrics exporter");
+
+    let payload = exporter.render().expect("metrics payload");
+    let text = String::from_utf8(payload).expect("utf8 metrics");
+
+    assert!(text.contains("atipicial_node_service_enabled{service=\"indexer\"} 1"));
+    assert!(text.contains("atipicial_node_indexer_up 1"));
+    assert!(text.contains("atipicial_node_indexer_indexed_height -1"));
+    assert!(text.contains("atipicial_node_indexer_indexed_blocks 0"));
+    assert!(text.contains("atipicial_node_indexer_blocks_behind -1"));
+    assert!(text.contains("atipicial_node_indexer_synced 0"));
+}
+
+#[test]
+fn renders_indexer_lag_metrics_when_registered() {
+    let node = test_node();
+    seed_ledger_height(&node, 5);
+    let exporter = MetricsExporter::new(node, service_handles(Some(indexed_service_at(3)), None))
+        .expect("metrics exporter");
+
+    let payload = exporter.render().expect("metrics payload");
+    let text = String::from_utf8(payload).expect("utf8 metrics");
+
+    assert!(text.contains("atipicial_node_ledger_height 5"));
+    assert!(text.contains("atipicial_node_indexer_up 1"));
+    assert!(text.contains("atipicial_node_indexer_indexed_height 3"));
+    assert!(text.contains("atipicial_node_indexer_blocks_behind 2"));
+    assert!(text.contains("atipicial_node_indexer_synced 0"));
+}
+
+#[test]
+fn renders_indexer_ahead_of_ledger_as_unsynced() {
+    let node = test_node();
+    seed_ledger_height(&node, 3);
+    let exporter = MetricsExporter::new(node, service_handles(Some(indexed_service_at(5)), None))
+        .expect("metrics exporter");
+
+    let payload = exporter.render().expect("metrics payload");
+    let text = String::from_utf8(payload).expect("utf8 metrics");
+
+    assert!(text.contains("atipicial_node_ledger_height 3"));
+    assert!(text.contains("atipicial_node_indexer_indexed_height 5"));
+    assert!(text.contains("atipicial_node_indexer_blocks_behind 0"));
+    assert!(text.contains("atipicial_node_indexer_synced 0"));
+}
+
+#[tokio::test]
+async fn serves_health_and_readiness_endpoints() {
+    let node = test_node();
+    let exporter =
+        Arc::new(MetricsExporter::new(node, empty_services()).expect("metrics exporter"));
+
+    let health = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::GET)
+            .uri(TELEMETRY_HEALTH_PATH)
+            .body(Body::empty())
+            .expect("health request"),
+        "/metrics".to_string(),
+        Arc::clone(&exporter),
+    )
+    .await
+    .expect("health response");
+    assert_eq!(health.status(), StatusCode::OK);
+    assert_eq!(
+        health
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok()),
+        Some("application/json")
+    );
+    let health_body = hyper::body::to_bytes(health.into_body())
+        .await
+        .expect("health body");
+    let health_json: serde_json::Value = serde_json::from_slice(&health_body).expect("health json");
+    assert_eq!(health_json["status"], "ok");
+    assert_eq!(health_json["service"], "atipicial-node");
+
+    let ready = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::GET)
+            .uri(TELEMETRY_READY_PATH)
+            .body(Body::empty())
+            .expect("ready request"),
+        "/metrics".to_string(),
+        exporter,
+    )
+    .await
+    .expect("ready response");
+    assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let ready_body = hyper::body::to_bytes(ready.into_body())
+        .await
+        .expect("ready body");
+    let ready_json: serde_json::Value = serde_json::from_slice(&ready_body).expect("ready json");
+    assert_eq!(ready_json["status"], "starting");
+    assert_eq!(ready_json["ready"], false);
+    assert_eq!(ready_json["ledger_height"], serde_json::Value::Null);
+    assert_eq!(ready_json["services"]["indexer"]["enabled"], false);
+    assert_eq!(ready_json["services"]["indexer"]["ready"], true);
+}
+
+#[tokio::test]
+async fn remote_ledger_readiness_uses_upstream_height_without_local_ledger() {
+    let (node, services) = remote_ledger_node(42);
+    let exporter = Arc::new(MetricsExporter::new(node, services).expect("metrics exporter"));
+
+    let ready = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::GET)
+            .uri(TELEMETRY_READY_PATH)
+            .body(Body::empty())
+            .expect("ready request"),
+        "/metrics".to_string(),
+        exporter,
+    )
+    .await
+    .expect("ready response");
+
+    assert_eq!(ready.status(), StatusCode::OK);
+    let ready_body = hyper::body::to_bytes(ready.into_body())
+        .await
+        .expect("ready body");
+    let ready_json: serde_json::Value = serde_json::from_slice(&ready_body).expect("ready json");
+    assert_eq!(ready_json["status"], "ready");
+    assert_eq!(ready_json["ready"], true);
+    assert_eq!(ready_json["ledger_height"], 42);
+    assert_eq!(ready_json["ledger_source"], "remote_rpc");
+    assert_eq!(
+        ready_json["remote_ledger_rpc"],
+        "https://rpc.example.invalid"
+    );
+}
+
+#[tokio::test]
+async fn remote_ledger_readiness_waits_when_upstream_height_is_unknown() {
+    let (node, services) = remote_ledger_node_with_height(None);
+    let exporter = Arc::new(MetricsExporter::new(node, services).expect("metrics exporter"));
+
+    let ready = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::GET)
+            .uri(TELEMETRY_READY_PATH)
+            .body(Body::empty())
+            .expect("ready request"),
+        "/metrics".to_string(),
+        exporter,
+    )
+    .await
+    .expect("ready response");
+
+    assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let ready_body = hyper::body::to_bytes(ready.into_body())
+        .await
+        .expect("ready body");
+    let ready_json: serde_json::Value = serde_json::from_slice(&ready_body).expect("ready json");
+    assert_eq!(ready_json["status"], "starting");
+    assert_eq!(ready_json["ready"], false);
+    assert!(ready_json["ledger_height"].is_null());
+    assert_eq!(ready_json["ledger_source"], "remote_rpc");
+    assert_eq!(
+        ready_json["remote_ledger_rpc"],
+        "https://rpc.example.invalid"
+    );
+}
+
+#[tokio::test]
+async fn remote_ledger_readiness_reports_upstream_tip_error() {
+    let (node, services) = remote_ledger_node_with_error("remote getblockcount failed");
+    let exporter = Arc::new(MetricsExporter::new(node, services).expect("metrics exporter"));
+
+    let ready = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::GET)
+            .uri(TELEMETRY_READY_PATH)
+            .body(Body::empty())
+            .expect("ready request"),
+        "/metrics".to_string(),
+        exporter,
+    )
+    .await
+    .expect("ready response");
+
+    assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let ready_body = hyper::body::to_bytes(ready.into_body())
+        .await
+        .expect("ready body");
+    let ready_json: serde_json::Value = serde_json::from_slice(&ready_body).expect("ready json");
+    assert_eq!(ready_json["status"], "starting");
+    assert_eq!(ready_json["ready"], false);
+    assert!(ready_json["ledger_height"].is_null());
+    assert_eq!(ready_json["ledger_source"], "remote_rpc");
+    assert_eq!(
+        ready_json["remote_ledger_rpc"],
+        "https://rpc.example.invalid"
+    );
+    assert_eq!(
+        ready_json["remote_ledger_error"],
+        "remote getblockcount failed"
+    );
+}
+
+#[tokio::test]
+async fn readiness_reports_registered_indexer_status() {
+    let node = test_node();
+    let services = service_handles(Some(Arc::new(atipicial_indexer::IndexerService::new())), None);
+    let exporter = Arc::new(MetricsExporter::new(node, services).expect("metrics exporter"));
+
+    let ready = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::GET)
+            .uri(TELEMETRY_READY_PATH)
+            .body(Body::empty())
+            .expect("ready request"),
+        "/metrics".to_string(),
+        exporter,
+    )
+    .await
+    .expect("ready response");
+    assert_eq!(ready.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let ready_body = hyper::body::to_bytes(ready.into_body())
+        .await
+        .expect("ready body");
+    let ready_json: serde_json::Value = serde_json::from_slice(&ready_body).expect("ready json");
+    assert_eq!(ready_json["services"]["indexer"]["enabled"], true);
+    assert_eq!(ready_json["services"]["indexer"]["ready"], true);
+    assert_eq!(ready_json["services"]["indexer"]["indexed_blocks"], 0);
+}
+
+#[tokio::test]
+async fn readiness_reports_indexer_lag_and_sync_state() {
+    let node = test_node();
+    seed_ledger_height(&node, 5);
+    let exporter = Arc::new(
+        MetricsExporter::new(node, service_handles(Some(indexed_service_at(3)), None))
+            .expect("metrics exporter"),
+    );
+
+    let ready = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::GET)
+            .uri(TELEMETRY_READY_PATH)
+            .body(Body::empty())
+            .expect("ready request"),
+        "/metrics".to_string(),
+        exporter,
+    )
+    .await
+    .expect("ready response");
+    assert_eq!(ready.status(), StatusCode::OK);
+    let ready_body = hyper::body::to_bytes(ready.into_body())
+        .await
+        .expect("ready body");
+    let ready_json: serde_json::Value = serde_json::from_slice(&ready_body).expect("ready json");
+    assert_eq!(ready_json["status"], "ready");
+    assert_eq!(ready_json["ledger_height"], 5);
+    assert_eq!(ready_json["services"]["indexer"]["indexed_height"], 3);
+    assert_eq!(ready_json["services"]["indexer"]["blocks_behind"], 2);
+    assert_eq!(ready_json["services"]["indexer"]["synced"], false);
+}
+
+#[tokio::test]
+async fn readiness_reports_indexer_ahead_of_ledger_as_unsynced() {
+    let node = test_node();
+    seed_ledger_height(&node, 3);
+    let exporter = Arc::new(
+        MetricsExporter::new(node, service_handles(Some(indexed_service_at(5)), None))
+            .expect("metrics exporter"),
+    );
+
+    let ready = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::GET)
+            .uri(TELEMETRY_READY_PATH)
+            .body(Body::empty())
+            .expect("ready request"),
+        "/metrics".to_string(),
+        exporter,
+    )
+    .await
+    .expect("ready response");
+    assert_eq!(ready.status(), StatusCode::OK);
+    let ready_body = hyper::body::to_bytes(ready.into_body())
+        .await
+        .expect("ready body");
+    let ready_json: serde_json::Value = serde_json::from_slice(&ready_body).expect("ready json");
+    assert_eq!(ready_json["ledger_height"], 3);
+    assert_eq!(ready_json["services"]["indexer"]["indexed_height"], 5);
+    assert_eq!(ready_json["services"]["indexer"]["blocks_behind"], 0);
+    assert_eq!(ready_json["services"]["indexer"]["synced"], false);
+}
+
+#[tokio::test]
+async fn telemetry_routes_reject_unknown_paths_and_non_get_methods() {
+    let node = test_node();
+    let exporter =
+        Arc::new(MetricsExporter::new(node, empty_services()).expect("metrics exporter"));
+
+    let missing = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::GET)
+            .uri("/missing")
+            .body(Body::empty())
+            .expect("missing request"),
+        "/custom-metrics".to_string(),
+        Arc::clone(&exporter),
+    )
+    .await
+    .expect("missing response");
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+
+    let wrong_method = serve_metrics_request(
+        Request::builder()
+            .method(hyper::Method::POST)
+            .uri(TELEMETRY_HEALTH_PATH)
+            .body(Body::empty())
+            .expect("post request"),
+        "/custom-metrics".to_string(),
+        exporter,
+    )
+    .await
+    .expect("post response");
+    assert_eq!(wrong_method.status(), StatusCode::METHOD_NOT_ALLOWED);
+}

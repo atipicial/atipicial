@@ -1,0 +1,33 @@
+[package]
+name = "atipicial-vm"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Canonical Atipicial N3 VM, execution engine, contexts, and reference-counted stack items"
+
+[dependencies]
+atipicial-io = { workspace = true }
+atipicial-primitives = { workspace = true }
+atipicial-crypto = { workspace = true }
+atipicial-error = { workspace = true }
+parking_lot = { workspace = true }
+base64 = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
+thiserror = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+sha2 = { workspace = true }
+tracing = { workspace = true }
+rustc-hash = { workspace = true }
+
+[lints]
+workspace = true

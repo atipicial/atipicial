@@ -1,0 +1,53 @@
+[package]
+name = "atipicial-consensus"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "dBFT consensus for Atipicial blockchain"
+
+[dependencies]
+# Internal crates
+atipicial-primitives = { workspace = true }
+atipicial-error = { workspace = true }
+atipicial-crypto = { workspace = true }
+atipicial-io = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
+
+# Serialization
+serde = { workspace = true }
+bincode = { workspace = true }
+rand = { workspace = true }
+lru = { workspace = true }
+
+# Security
+zeroize = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+atipicial-vm = { workspace = true }
+
+
+
+atipicial-payloads = { workspace = true }
+
+[dev-dependencies]
+
+[features]
+default = []
+
+[lints]
+workspace = true

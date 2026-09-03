@@ -1,0 +1,53 @@
+//! # atipicial-crypto
+//!
+//! Cryptographic hashes, curves, signatures, and filters.
+//!
+//! ## Boundary
+//!
+//! This foundation crate owns cryptographic primitives and must not depend on
+//! node services, RPC, storage engines, or UI crates.
+//!
+//! ## Contents
+//!
+//! - `curves`: Elliptic-curve adapters and point types used by Atipicial
+//!   cryptography.
+//! - `error`: Typed error definitions and conversions.
+//! - `filters`: Probabilistic filters and related helpers used by networking
+//!   and indexes.
+//! - `formats`: Binary and textual conversion helpers for cryptographic data.
+//! - `hashes`: Hash functions and hash-domain helpers used by protocol code.
+//! - `keys`: wallet-facing key derivation, signing, and verification helpers.
+//! - `tests`: Module-local tests and regression coverage.
+
+pub mod curves;
+#[path = "errors/error.rs"]
+pub mod error;
+pub mod filters;
+pub mod formats;
+pub mod hashes;
+pub mod keys;
+
+pub use curves::{bls12381_point, ecc};
+pub use filters::bloom_filter;
+pub use formats::encoding;
+pub use hashes::{hash, merkle_tree, murmur, named_curve_hash};
+pub use keys::{bip32, signature};
+
+// Re-exports
+pub use bip32::Bip32Crypto;
+pub use bloom_filter::BloomFilter;
+pub use bls12381_point::Bls12381Point;
+pub use ecc::{ECCurve, ECPoint};
+pub use encoding::{base58, base64};
+pub use error::{CryptoError, CryptoResult};
+pub use hash::{Crypto, CtCompare, HashAlgorithm, Sha256Hasher};
+pub use merkle_tree::MerkleTree;
+pub use named_curve_hash::NamedCurveHash;
+pub use signature::{
+    ECC, ECDsa, Ed25519Crypto, ATCFS_ECDSA_SHA512_PREFIX, ATCFS_ECDSA_SHA512_SIGNATURE_LEN,
+    Secp256k1Crypto, Secp256r1Crypto,
+};
+
+#[cfg(test)]
+#[path = "tests/lib.rs"]
+mod tests;

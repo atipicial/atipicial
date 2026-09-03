@@ -1,0 +1,82 @@
+use super::super::providers::{OracleContractReadProvider, OracleServiceNativeProvider};
+use super::super::utils::{ledger_height, wallet_has_oracle_account};
+use super::super::{OracleRuntimeProvider, OracleService, OracleStatus};
+use atipicial_execution::native_contract_provider::NativeContractProvider;
+use atipicial_wallets::Aep6Wallet;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+use tracing::{info, warn};
+
+impl<R, P> OracleService<R, P>
+where
+    R: OracleRuntimeProvider + 'static,
+    P: NativeContractProvider + OracleContractReadProvider + 'static,
+{
+    /// Start the oracle service with the wallet that owns a designated oracle key.
+    pub fn start(self: &Arc<Self>, wallet: Arc<Aep6Wallet>) {
+        if self.is_running() {
+            return;
+        }
+
+        let snapshot = self.snapshot_cache();
+        let height = ledger_height(&snapshot);
+        let native = self.native_provider();
+        let oracles = match native.designated_oracles(&snapshot, height) {
+            Ok(oracles) => oracles,
+            Err(err) => {
+                warn!(target: "atipicial::oracle", %err, "failed to load designated oracle list");
+                return;
+            }
+        };
+
+        if oracles.is_empty() {
+            warn!(target: "atipicial::oracle", "oracle service unavailable (no designated oracles)");
+            return;
+        }
+
+        if !wallet_has_oracle_account(wallet.as_ref(), &oracles) {
+            warn!(target: "atipicial::oracle", "oracle service unavailable (wallet has no oracle key)");
+            return;
+        }
+
+        *self.wallet.write() = Some(wallet);
+        self.cancel.store(false, Ordering::SeqCst);
+        self.status
+            .store(OracleStatus::Running.as_u8(), Ordering::SeqCst);
+
+        let request_task = {
+            let service = Arc::clone(self);
+            tokio::spawn(async move {
+                service.process_requests_loop().await;
+            })
+        };
+
+        let timer_task = {
+            let service = Arc::clone(self);
+            tokio::spawn(async move {
+                service.timer_loop().await;
+            })
+        };
+
+        *self.request_task.lock() = Some(request_task);
+        *self.timer_task.lock() = Some(timer_task);
+
+        info!(target: "atipicial::oracle", "oracle service started");
+    }
+
+    /// Stop the oracle service and cancel its background tasks.
+    pub fn stop(&self) {
+        self.cancel.store(true, Ordering::SeqCst);
+        *self.wallet.write() = None;
+        self.status
+            .store(OracleStatus::Stopped.as_u8(), Ordering::SeqCst);
+        self.pending_queue.lock().clear();
+        if let Some(handle) = self.request_task.lock().take() {
+            handle.abort();
+        }
+        if let Some(handle) = self.timer_task.lock().take() {
+            handle.abort();
+        }
+        info!(target: "atipicial::oracle", "oracle service stopped");
+    }
+}

@@ -1,0 +1,51 @@
+[package]
+name = "atipicial-rs-fuzz"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+authors = ["R3E Network <jimmy@r3e.network>"]
+license = "MIT"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# Deliberately no `version` pins. This crate sits outside the workspace, so
+# `cargo update --workspace` does not touch it, and a `version` here would have
+# to be bumped by hand on every release -- it was left at 0.11.1 through two
+# bumps, which broke every fuzz target with an unsatisfiable requirement. The
+# field only matters when publishing, and this crate is `publish = false`.
+atipicial-io = { path = "../atipicial-io" }
+atipicial-network = { path = "../atipicial-network" }
+atipicial-payloads = { path = "../atipicial-payloads" }
+atipicial-vm = { path = "../atipicial-vm" }
+
+
+[[bin]]
+name = "fuzz_transaction_parse"
+path = "fuzz_targets/fuzz_transaction_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_script_parse"
+path = "fuzz_targets/fuzz_script_parse.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_message_parse"
+path = "fuzz_targets/fuzz_message_parse.rs"
+test = false
+doc = false
+
+[profile.release]
+debug = true
+opt-level = 3
+lto = "thin"
+
+[profile.dev]
+opt-level = 1
+debug = true

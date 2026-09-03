@@ -1,0 +1,187 @@
+services:
+  atipicial-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - BUILDKIT_INLINE_CACHE=1
+    image: atipicial-rust-node:latest
+    container_name: atipicial-rust-node
+    restart: unless-stopped
+
+    # Port mappings for both networks
+    ports:
+      # TestNet P2P
+      - "20333:20333"
+      # TestNet RPC
+      - "20332:20332"
+      # MainNet P2P (when using mainnet)
+      - "10333:10333"
+      # MainNet RPC (when using mainnet)
+      - "10332:10332"
+      # MainNet service-profile metrics/health endpoints
+      - "${ATC_MAINNET_METRICS_PORT:-19090}:9090"
+      # TestNet service-profile metrics/health endpoints
+      - "${ATC_TESTNET_METRICS_PORT:-19091}:9091"
+
+    # Volume mounts for persistence
+    volumes:
+      # Named volume for blockchain data
+      - atipicial-data:/data
+      # Optional: Bind mount for custom configuration
+      - ${ATC_CONFIG_HOST_PATH:-/dev/null}:/config/custom.toml:ro
+      # Optional: Bind mount for logs
+      - ${ATC_LOGS_HOST_PATH:-atipicial-logs}:/data/Logs
+
+    # Environment configuration
+    environment:
+      - ATC_NETWORK=${ATC_NETWORK:-testnet}
+      - ATC_PROFILE=${ATC_PROFILE:-}
+      - ATC_CONFIG=${ATC_CONFIG:-}
+      - ATC_STORAGE=${ATC_STORAGE:-}
+      - ATC_BACKEND=${ATC_BACKEND:-mdbx}
+      - ATC_PLUGINS_DIR=${ATC_PLUGINS_DIR:-/data/Plugins}
+      - ATC_RPC_PORT=${ATC_RPC_PORT:-}
+      - ATC_LISTEN_PORT=${ATC_LISTEN_PORT:-}
+      - ATC_HEALTH_PORT=${ATC_HEALTH_PORT:-}
+      - ATC_HEALTH_MAX_HEADER_LAG=${ATC_HEALTH_MAX_HEADER_LAG:-20}
+      - RUST_LOG=${RUST_LOG:-info}
+      # Optional: RPC credentials
+      - ATC_RPC_USER=${ATC_RPC_USER:-}
+      - ATC_RPC_PASS=${ATC_RPC_PASS:-}
+      # Optional: observability provider credentials referenced by token_env / headers_env
+      - BETTER_STACK_SOURCE_TOKEN=${BETTER_STACK_SOURCE_TOKEN:-}
+      - GOOGLE_ERROR_REPORTING_TOKEN=${GOOGLE_ERROR_REPORTING_TOKEN:-}
+      - SENTRY_AUTH_HEADER=${SENTRY_AUTH_HEADER:-}
+
+    # Health check using JSON-RPC getversion
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "/bin/sh",
+          "-c",
+          "port_file=/tmp/atipicial_rpc_port; if [ -f \"$$port_file\" ]; then port=$$(cat \"$$port_file\"); else port=$${ATC_RPC_PORT:-}; fi; if [ -z \"$$port\" ]; then port=20332; case \"$${ATC_NETWORK:-testnet}\" in [Mm]ain*) port=10332 ;; esac; fi; curl -sf -X POST -H 'Content-Type: application/json' --data '{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"getversion\",\"params\":[]}' http://127.0.0.1:$$port",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '${ATC_CPU_LIMIT:-4}'
+          memory: ${ATC_MEMORY_LIMIT:-8G}
+        reservations:
+          cpus: '${ATC_CPU_RESERVE:-2}'
+          memory: ${ATC_MEMORY_RESERVE:-4G}
+
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+
+    # Read-only root filesystem
+    read_only: true
+
+    # Temporary filesystems for writable areas
+    tmpfs:
+      - /tmp:noexec,nosuid,size=100m
+
+    # User (should match Dockerfile)
+    user: "atipicial"
+
+    # Networks
+    networks:
+      - atipicial-network
+
+    # Ulimits for production
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+      nproc:
+        soft: 8192
+        hard: 8192
+      memlock:
+        soft: -1
+        hard: -1
+
+    # Logging configuration
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+        labels: "service,environment"
+        env: "ATC_NETWORK"
+
+  # Optional: Prometheus for metrics collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: atipicial-prometheus
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - '--web.enable-lifecycle'
+    networks:
+      - atipicial-network
+    depends_on:
+      - atipicial-node
+
+  # Optional: Grafana dashboard
+  atipicial-monitor:
+    image: grafana/grafana:latest
+    container_name: atipicial-monitor
+    restart: unless-stopped
+    profiles:
+      - monitoring
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./config/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./config/grafana/datasources:/etc/grafana/provisioning/datasources:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_ROOT_URL=${GRAFANA_ROOT_URL:-http://localhost:3000}
+      - GF_AUTH_ANONYMOUS_ENABLED=false
+    networks:
+      - atipicial-network
+    depends_on:
+      - prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  atipicial-data:
+    driver: local
+  atipicial-logs:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+
+networks:
+  atipicial-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

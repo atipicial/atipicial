@@ -1,0 +1,36 @@
+[package]
+name = "atipicial-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "IO operations and data structures for the Atipicial blockchain"
+
+[dependencies]
+# External dependencies
+bytes = { workspace = true }
+thiserror = { workspace = true }
+
+# Compression
+lz4_flex = { workspace = true }
+
+# Internal dependencies
+# atipicial-primitives is a Layer 0 crate with no atipicial-* dependencies
+atipicial-primitives = { workspace = true }
+
+[features]
+default = []
+
+[[test]]
+name = "io"
+path = "tests/io/mod.rs"
+
+[lints]
+workspace = true

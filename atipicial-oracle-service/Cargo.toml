@@ -1,0 +1,74 @@
+[package]
+name = "atipicial-oracle-service"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Oracle plugin for the Atipicial blockchain (HTTPS + AtipicialFs oracle request fulfilment)"
+
+[package.metadata.cargo-machete]
+# build.rs invokes both only when the atipicialfs-grpc feature generates bindings.
+ignored = ["protoc-bin-vendored", "tonic-build"]
+
+[dependencies]
+atipicial-vm = { workspace = true }
+atipicial-storage = { workspace = true }
+atipicial-crypto = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+rand = { workspace = true }
+percent-encoding = { workspace = true }
+url = { workspace = true }
+futures = { workspace = true }
+serde_json = { workspace = true }
+parking_lot = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+# HTTPS oracle fetching (behind the `oracle` feature, matching atipicial-core's prior gating).
+reqwest = { workspace = true, optional = true }
+# AtipicialFs gRPC transport (behind `atipicialfs-grpc`).
+tonic = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
+
+atipicial-config = { workspace = true }
+atipicial-error = { workspace = true }
+atipicial-execution = { workspace = true }
+atipicial-io = { workspace = true }
+atipicial-serialization = { workspace = true }
+atipicial-native-contracts = { workspace = true }
+atipicial-mempool = { workspace = true }
+atipicial-payloads = { workspace = true }
+atipicial-primitives = { workspace = true }
+atipicial-runtime = { workspace = true }
+atipicial-wallets = { workspace = true }
+
+[build-dependencies]
+# Only used when the atipicialfs-grpc feature is enabled (build.rs checks
+# CARGO_FEATURE_ATCFS_GRPC); Cargo cannot feature-gate build-deps.
+tonic-build = { workspace = true }
+protoc-bin-vendored = { workspace = true }
+
+[dev-dependencies]
+bs58 = { workspace = true }
+# Tests construct explicit complete chain specs; production code uses
+# `ChainSpecProvider` from `atipicial-config` plus the narrow runtime capabilities.
+atipicial-system = { workspace = true }
+atipicial-test-fixtures = { workspace = true }
+
+[features]
+default = []
+# Oracle HTTPS fetching - requires reqwest.
+oracle = ["dep:reqwest"]
+# AtipicialFs gRPC oracle protocol - requires tonic/prost and pulls in oracle.
+atipicialfs-grpc = ["dep:tonic", "dep:prost", "oracle"]
+
+[lints]
+workspace = true

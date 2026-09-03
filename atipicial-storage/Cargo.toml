@@ -1,0 +1,52 @@
+[package]
+name = "atipicial-storage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Storage traits and abstractions for Atipicial blockchain"
+
+[dependencies]
+# Internal crates
+atipicial-primitives = { workspace = true }
+atipicial-error = { workspace = true }
+atipicial-io = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Math
+num-bigint = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Concurrency
+parking_lot = { workspace = true }
+
+# Hash functions
+sha2 = { workspace = true }
+xxhash-rust = { workspace = true }
+rand = { workspace = true }
+
+# Collections
+rustc-hash = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+libmdbx = { workspace = true }
+mdbx-sys = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

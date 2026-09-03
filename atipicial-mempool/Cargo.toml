@@ -1,0 +1,38 @@
+[package]
+name = "atipicial-mempool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Canonical home for Atipicial transaction admission, pool policy, indexes, and per-block verification context"
+
+[dependencies]
+atipicial-primitives = { workspace = true }
+atipicial-payloads = { workspace = true }
+atipicial-config = { workspace = true }
+atipicial-error = { workspace = true }
+atipicial-storage = { workspace = true }
+atipicial-execution = { workspace = true }
+atipicial-crypto = { workspace = true }
+# Transaction verification (C# Transaction.Verify port): native state
+# readers, redeem-script recognizers, strict script validation, the
+# oracle fixed script, and the AEP-17 account-state codec.
+atipicial-native-contracts = { workspace = true }
+atipicial-vm = { workspace = true }
+atipicial-io = { workspace = true }
+num-bigint = { workspace = true }
+parking_lot = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+atipicial-serialization = { workspace = true }
+
+[lints]
+workspace = true

@@ -1,0 +1,48 @@
+[package]
+name = "atipicial-execution"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Atipicial smart-contract execution engine (ApplicationEngine), interop services, and storage/iterator helpers"
+
+[dependencies]
+# Foundation / VM layer
+atipicial-primitives = { workspace = true }
+atipicial-error = { workspace = true }
+atipicial-io = { workspace = true }
+atipicial-crypto = { workspace = true }
+atipicial-vm = { workspace = true }
+atipicial-config = { workspace = true }
+atipicial-storage = { workspace = true }
+atipicial-manifest = { workspace = true }
+atipicial-serialization = { workspace = true }
+atipicial-payloads = { workspace = true }
+atipicial-runtime = { workspace = true }
+
+# External
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+parking_lot = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
+rustc-hash = { workspace = true }
+indexmap = { workspace = true }
+base64 = { workspace = true }
+sha2 = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+proptest = { workspace = true }
+
+[lints]
+workspace = true

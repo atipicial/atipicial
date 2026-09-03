@@ -1,0 +1,126 @@
+[package]
+name = "atipicial-node"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+homepage.workspace = true
+repository.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+description = "Atipicial N3 blockchain node daemon"
+
+[[bin]]
+name = "atipicial-node"
+path = "src/main.rs"
+
+[[bin]]
+name = "atipicial-db-probe"
+path = "src/bin/atipicial-db-probe.rs"
+
+[[bin]]
+name = "atipicial-pack-verify"
+path = "src/bin/atipicial-pack-verify.rs"
+
+[[bin]]
+name = "atipicial-pack-build"
+path = "src/bin/atipicial-pack-build.rs"
+
+[[bin]]
+name = "atipicial-pack-activate"
+path = "src/bin/atipicial-pack-activate.rs"
+
+[[bin]]
+name = "atipicial-pack-marker"
+path = "src/bin/atipicial-pack-marker.rs"
+
+[[bin]]
+name = "atipicial-mdbx-rebase"
+path = "src/bin/atipicial-mdbx-rebase.rs"
+
+[features]
+default = []
+# Optional HSM-backed consensus signing (PKCS#11: AWS/Azure/GCP).
+hsm = ["dep:atipicial-hsm", "atipicial-hsm/pkcs11"]
+
+[dependencies]
+
+# HSM-backed consensus signer (feature-gated)
+atipicial-hsm = { workspace = true, optional = true }
+
+# Async channels
+futures = { workspace = true }
+
+# CLI and configuration
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+prometheus = { workspace = true }
+parking_lot = { workspace = true }
+reqwest = { workspace = true }
+base64 = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-util = { workspace = true, features = ["rt"] }
+hyper = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+tracing-appender = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Utilities
+chrono = { workspace = true }
+libc = "0.2"
+sysinfo = { workspace = true }
+url = { workspace = true }
+num-bigint = { workspace = true }
+num-traits = { workspace = true }
+mimalloc = { version = "0.1", default-features = false }
+
+# The node workspace crates. (atipicial-tokens-tracker was merged into atipicial-rpc; its
+# tokens_tracker module is now at atipicial-rpc/src/plugins/tokens_tracker/.)
+atipicial-consensus = { workspace = true }
+atipicial-crypto = { workspace = true }
+atipicial-rpc = { workspace = true, features = ["client", "server"] }
+atipicial-indexer = { workspace = true }
+atipicial-config = { workspace = true }
+atipicial-execution = { workspace = true }
+atipicial-io = { workspace = true }
+atipicial-native-contracts = { workspace = true }
+atipicial-network = { workspace = true }
+atipicial-payloads = { workspace = true }
+atipicial-primitives = { workspace = true }
+atipicial-runtime = { workspace = true }
+atipicial-state-packs = { workspace = true }
+atipicial-state-service = { workspace = true }
+atipicial-storage = { workspace = true }
+atipicial-static-files = { workspace = true }
+atipicial-trie = { workspace = true }
+atipicial-serialization = { workspace = true }
+atipicial-system = { workspace = true }
+atipicial-blockchain = { workspace = true }
+atipicial-manifest = { workspace = true }
+atipicial-vm = { workspace = true }
+hex = { workspace = true }
+atipicial-mempool = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+atipicial-test-fixtures = { workspace = true }
+
+[[test]]
+name = "block_assembly_test"
+path = "tests/consensus/block_assembly_test.rs"
+
+[lints]
+workspace = true

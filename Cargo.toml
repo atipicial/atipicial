@@ -1,0 +1,467 @@
+[workspace]
+resolver = "2"
+members = [
+    # === Foundation Layer ===
+    # Primitive value types (`UInt160`, `UInt256`, `BigDecimal`).
+    "atipicial-primitives",
+
+    # === Infrastructure Layer ===
+    # Node and protocol configuration.
+    "atipicial-config",
+    # Cryptography: hashing, ECC, signatures, BLS12-381.
+    "atipicial-crypto",
+    # Atipicial-compatible Merkle Patricia Trie nodes, proofs, and mutation cache.
+    "atipicial-trie",
+    # Storage traits, `DataCache`, MDBX, and in-memory stores.
+    "atipicial-storage",
+    # Append-only compressed static files for immutable ledger records.
+    "atipicial-static-files",
+    # Append-only checksummed node packs with immutable sorted index runs.
+    "atipicial-state-packs",
+    # Canonical verifiable checkpoint formats and dependency-light proof types.
+    "atipicial-checkpoint",
+    # Binary IO helpers (matches C# Atipicial.IO).
+    "atipicial-io",
+    # Stateful AtipicialVM interpreter and host runtime.
+    "atipicial-vm",
+    # Authoritative `CoreError` / `CoreResult` vocabulary.
+    "atipicial-error",
+    # Compression, binary/JSON serializers, and VM-aware codecs.
+    "atipicial-serialization",
+    # Contract ABI, AEF, method tokens, and validator attributes.
+    "atipicial-manifest",
+
+    # === Protocol Layer ===
+    # Canonical Atipicial P2P payload types (`Block`, `Header`, `Transaction`, ...).
+    "atipicial-payloads",
+    # dBFT consensus payloads and protocol engine.
+    "atipicial-consensus",
+    # Optional HSM-backed consensus signing support.
+    "atipicial-hsm",
+
+    # === Domain Service Layer ===
+    # Reth-style service traits, events, and shared service errors.
+    "atipicial-runtime",
+    # Smart-contract execution engine.
+    "atipicial-execution",
+    # Native contracts (ATC, GAS, Policy, Oracle, Notary, ...).
+    "atipicial-native-contracts",
+
+    # Ledger state-root service and MPT store.
+    "atipicial-state-service",
+    # Transaction memory pool and admission/reverification logic.
+    "atipicial-mempool",
+
+    # === Node Service Layer ===
+    # Block validation, persistence, ledger context, and header cache service.
+    "atipicial-blockchain",
+    # P2P network host (`LocalNode`, `RemoteNode`, `TaskManager`).
+    "atipicial-network",
+    # Wallet/key management.
+    "atipicial-wallets",
+    # Read-side block, transaction, account, and notification indexing.
+    "atipicial-indexer",
+    # Off-chain Oracle request fulfilment over HTTPS and AtipicialFs.
+    "atipicial-oracle-service",
+
+    # === Composition Layer ===
+    # Embeddable node composition root.
+    "atipicial-system",
+
+    # === Plugin / RPC Boundary ===
+    # JSON-RPC server/client plus ApplicationLogs, TokensTracker, AtipicialIndexer, and Oracle groups.
+    "atipicial-rpc",
+
+    # === Application Layer ===
+    # Node daemon binary.
+    "atipicial-node",
+
+    # === Development-only crates ===
+    # Cross-crate integration tests.
+    "tests",
+    # Criterion benchmarks.
+    "benches-package",
+    # Shared test fixtures (transactions, blocks, store helpers).
+    "atipicial-test-fixtures",
+]
+default-members = [
+    "atipicial-primitives",
+    "atipicial-config",
+    "atipicial-crypto",
+    "atipicial-trie",
+    "atipicial-storage",
+    "atipicial-io",
+    "atipicial-consensus",
+    "atipicial-node",
+]
+exclude = [
+    "target",
+    "data",
+    "docs",
+    "examples",
+    "fuzz",
+    # Standalone native GUI (eframe app). Built on its own; talks to the node
+    # over JSON-RPC + process control, so it stays out of the workspace graph.
+    "atipicial-gui",
+]
+
+[workspace.package]
+version = "0.14.0"
+edition = "2024"
+rust-version = "1.89"
+authors = [
+    "R3E Network <jimmy@r3e.network>"
+]
+homepage = "https://atipicial.com"
+repository = "https://github.com/r3e-network/atipicial-rs"
+documentation = "https://docs.rs/atipicial-rs"
+license = "MIT"
+keywords = ["blockchain", "atipicial", "smart-contracts", "cryptocurrency", "consensus"]
+categories = ["cryptography", "network-programming", "database", "development-tools"]
+readme = "README.md"
+
+[workspace.metadata]
+# Minimum supported Rust version policy
+msrv = "1.89"
+
+# Canonical crate-layer model consumed by architecture tests. Dependencies must
+# point to a lower layer unless the exact same-layer edge is recorded below.
+[workspace.metadata.architecture]
+allowed-same-layer-dependencies = [
+    # Infrastructure has an internal acyclic order while remaining one
+    # operator-independent mechanical layer.
+    "atipicial-config -> atipicial-crypto",
+    "atipicial-config -> atipicial-error",
+    "atipicial-crypto -> atipicial-error",
+    "atipicial-trie -> atipicial-crypto",
+    "atipicial-trie -> atipicial-error",
+    "atipicial-trie -> atipicial-io",
+    "atipicial-error -> atipicial-io",
+    "atipicial-manifest -> atipicial-crypto",
+    "atipicial-manifest -> atipicial-error",
+    "atipicial-manifest -> atipicial-io",
+    "atipicial-manifest -> atipicial-serialization",
+    "atipicial-manifest -> atipicial-vm",
+    "atipicial-serialization -> atipicial-error",
+    "atipicial-serialization -> atipicial-io",
+    "atipicial-serialization -> atipicial-vm",
+    "atipicial-storage -> atipicial-error",
+    "atipicial-storage -> atipicial-io",
+    "atipicial-vm -> atipicial-crypto",
+    "atipicial-vm -> atipicial-error",
+    "atipicial-vm -> atipicial-io",
+    # Protocol implementations reuse the canonical payload vocabulary.
+    "atipicial-consensus -> atipicial-payloads",
+    "atipicial-hsm -> atipicial-consensus",
+    # Domain services have explicit one-way implementation relationships.
+    "atipicial-execution -> atipicial-runtime",
+    "atipicial-mempool -> atipicial-execution",
+    "atipicial-mempool -> atipicial-native-contracts",
+    "atipicial-native-contracts -> atipicial-execution",
+    "atipicial-native-contracts -> atipicial-runtime",
+    "atipicial-state-service -> atipicial-runtime",
+    # The off-chain Oracle worker consumes the node-service wallet lifecycle.
+    "atipicial-oracle-service -> atipicial-wallets",
+]
+
+[workspace.metadata.architecture.layers]
+foundation = ["atipicial-primitives"]
+infrastructure = [
+    "atipicial-io",
+    "atipicial-error",
+    "atipicial-crypto",
+    "atipicial-trie",
+    "atipicial-storage",
+    "atipicial-static-files",
+    "atipicial-state-packs",
+    "atipicial-checkpoint",
+    "atipicial-config",
+    "atipicial-vm",
+    "atipicial-serialization",
+    "atipicial-manifest",
+]
+protocol = ["atipicial-payloads", "atipicial-consensus", "atipicial-hsm"]
+domain-services = [
+    "atipicial-runtime",
+    "atipicial-execution",
+    "atipicial-native-contracts",
+    "atipicial-state-service",
+    "atipicial-mempool",
+]
+node-services = [
+    "atipicial-blockchain",
+    "atipicial-network",
+    "atipicial-wallets",
+    "atipicial-indexer",
+    "atipicial-oracle-service",
+]
+composition = ["atipicial-system"]
+plugin-boundary = ["atipicial-rpc"]
+application = ["atipicial-node", "atipicial-gui", "atipicial-test-fixtures"]
+
+# Centralized lint policy. Every member opts in with `[lints] workspace = true`
+# in its own Cargo.toml, so the rules live in exactly one place (replacing the
+# per-crate `#![deny(...)]` / `#![warn(...)]` headers). Crates that genuinely
+# need unsafe for measured hot paths or unavoidable FFI keep the deny and opt
+# out per-site with `#[allow(unsafe_code)]` + a `// SAFETY:` comment.
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+# Clippy policy, moved here from the inline flags in .github/workflows/ci.yml so
+# local `cargo clippy` enforces exactly what CI does. `all` is denied (priority
+# -1 so the specific allows below win); the allows are the pragmatic exceptions
+# the project has accepted.
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+doc_overindented_list_items = "allow"
+doc_lazy_continuation = "allow"
+large_enum_variant = "allow"
+# Sibling of large_enum_variant: Atipicial's error enums are intentionally large and
+# boxing every Result's Err to shave bytes is not worth the churn.
+result_large_err = "allow"
+module_inception = "allow"
+type_complexity = "allow"
+len_zero = "allow"
+nonminimal_bool = "allow"
+# Rust 1.89 activates these style-only rewrites across legacy protocol code.
+# Keep architecture changes reviewable; modernize touched modules incrementally.
+collapsible_if = "allow"
+enum_variant_names = "allow"
+too_many_arguments = "allow"
+field_reassign_with_default = "allow"
+assertions_on_constants = "allow"
+# False-fires on test byte-vectors that happen to approximate PI.
+approx_constant = "allow"
+
+[workspace.dependencies]
+# === Internal crates ===
+# Foundation layer
+atipicial-primitives = { path = "atipicial-primitives", version = "0.14.0" }
+
+# Infrastructure layer
+atipicial-config = { path = "atipicial-config", version = "0.14.0" }
+atipicial-crypto = { path = "atipicial-crypto", version = "0.14.0" }
+atipicial-trie = { path = "atipicial-trie", version = "0.14.0" }
+atipicial-storage = { path = "atipicial-storage", version = "0.14.0" }
+atipicial-static-files = { path = "atipicial-static-files", version = "0.14.0" }
+atipicial-state-packs = { path = "atipicial-state-packs", version = "0.14.0" }
+atipicial-checkpoint = { path = "atipicial-checkpoint", version = "0.14.0" }
+atipicial-io = { path = "atipicial-io", version = "0.14.0" }
+atipicial-vm = { path = "atipicial-vm", version = "0.14.0" }
+atipicial-error = { path = "atipicial-error", version = "0.14.0" }
+atipicial-serialization = { path = "atipicial-serialization", version = "0.14.0" }
+atipicial-manifest = { path = "atipicial-manifest", version = "0.14.0" }
+
+
+# Protocol layer
+atipicial-payloads = { path = "atipicial-payloads", version = "0.14.0" }
+atipicial-consensus = { path = "atipicial-consensus", version = "0.14.0" }
+atipicial-hsm = { path = "atipicial-hsm", version = "0.14.0" }
+
+# Domain service layer
+atipicial-runtime = { path = "atipicial-runtime", version = "0.14.0" }
+atipicial-execution = { path = "atipicial-execution", version = "0.14.0" }
+atipicial-native-contracts = { path = "atipicial-native-contracts", version = "0.14.0" }
+atipicial-state-service = { path = "atipicial-state-service", version = "0.14.0" }
+atipicial-mempool = { path = "atipicial-mempool", version = "0.14.0" }
+
+# Node service layer
+atipicial-blockchain = { path = "atipicial-blockchain", version = "0.14.0" }
+atipicial-network = { path = "atipicial-network", version = "0.14.0" }
+atipicial-wallets = { path = "atipicial-wallets", version = "0.14.0" }
+atipicial-indexer = { path = "atipicial-indexer", version = "0.14.0" }
+atipicial-oracle-service = { path = "atipicial-oracle-service", version = "0.14.0" }
+
+# Composition layer
+atipicial-system = { path = "atipicial-system", version = "0.14.0" }
+
+# Plugin / RPC boundary
+atipicial-rpc = { path = "atipicial-rpc", version = "0.14.0" }
+
+# Application layer
+atipicial-node = { path = "atipicial-node", version = "0.14.0" }
+
+# Development-only crates
+atipicial-test-fixtures = { path = "atipicial-test-fixtures", version = "0.14.0" }
+
+# === Core dependencies ===
+# Async runtime
+tokio = { version = "1.35", default-features = false }
+tokio-util = "0.7"
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+bincode = "1.3"
+toml = "0.8"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+zeroize = { version = "1.8", features = ["derive", "serde"] }
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json", "ansi"] }
+tracing-appender = "0.2"
+# CLI
+clap = { version = "=4.5.53", features = ["derive", "env", "unicode"] }
+
+# === Cryptography ===
+# Elliptic curve cryptography
+secp256k1 = { version = "0.28", features = ["recovery", "global-context"] }
+ed25519-dalek = { version = "=2.1.1", features = ["rand_core"] }
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+p256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+
+# BLS12-381 cryptography
+blst = "0.3"
+
+# Hashing
+sha2 = "0.10"
+sha3 = "0.10"
+ripemd = "0.1"
+blake2 = "0.10"
+blake2b_simd = "1.0"
+
+# Random number generation
+rand = "0.8"
+
+# === Encoding ===
+hex = "0.4"
+bs58 = { version = "0.5", features = ["check"] }
+bip39 = { version = "2.2", features = ["all-languages", "zeroize"] }
+base64 = "0.22"
+
+# === Numeric types ===
+num-bigint = { version = "0.4", features = ["serde"] }
+num-integer = "0.1"
+num-traits = "0.2"
+# === Data structures ===
+smallvec = { version = "1.13", features = ["const_new", "union"] }
+bytes = "1.5"
+hashbrown = { version = "0.14", features = ["serde"] }
+rustc-hash = "2.1"
+indexmap = { version = "=2.8.0", features = ["serde"] }
+lru = "0.16.3"
+fastbloom = { version = "0.17", default-features = false }
+bitflags = "2.4"
+bitvec = { version = "1.0.1", default-features = false, features = ["alloc"] }
+dashmap = "6.2.1"
+governor = { version = "0.10.4", default-features = false, features = ["std", "dashmap"] }
+memchr = "2.8"
+
+# === Storage ===
+libmdbx = { version = "0.5.3", default-features = false }
+mdbx-sys = "=12.13.2"
+
+# === Network ===
+# HTTP server (hyper) and HTTP client (reqwest)
+hyper = { version = "0.14", default-features = false, features = ["http1", "runtime", "server"] }
+reqwest = { version = "0.12", features = ["json", "blocking", "stream", "gzip"] }
+# Low-level networking
+socket2 = "0.5"
+
+# === Utilities ===
+uuid = { version = "=1.18.1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+url = { version = "=2.5.4", features = ["serde"] }
+parking_lot = "0.12"
+# === Development and testing ===
+tempfile = "=3.23.0"
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "=1.7.0"
+mockall = "0.12"
+
+# === Profiling ===
+pprof = { version = "0.13", features = ["flamegraph", "criterion"] }
+
+# Compression and metrics (always enabled).
+# >=0.11 hardens the safe decoder to return Err instead of panicking on
+# malformed input (0.10.0 panicked in sink.rs on crafted compressed payloads —
+# a peer-reachable DoS via the P2P message compression path). LZ4 block format
+# is unchanged across these versions, so cross-node/C# compatibility holds.
+lz4_flex = "=0.13.1"
+prometheus = "0.14"
+sysinfo = "0.29"
+
+# Additional shared deps not previously centralized
+num_cpus = "1.16"
+murmur3 = "0.5"
+rayon = "=1.10.0"
+subtle = "2.5"
+byteorder = "1.5"
+xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
+
+# Cryptography — symmetric encryption and KDFs
+hmac = "0.12"
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+cipher = "0.4"
+scrypt = "0.11"
+hkdf = "0.12"
+aes-gcm = "0.10"
+
+# Compression
+zstd = "0.13"
+
+# Dynamic loading
+libloading = "0.8"
+
+# URL encoding
+percent-encoding = "2.3"
+
+# Testing
+mockito = "1.0"
+
+# gRPC (AtipicialFs oracle transport)
+tonic = { version = "0.11", features = ["transport", "tls", "tls-roots"] }
+prost = "0.12"
+
+# Build dependencies
+tonic-build = "0.11"
+protoc-bin-vendored = "3.0"
+
+# Profiles
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+incremental = false
+
+# Release-equivalent codegen with debug symbols kept, for profiling (samply).
+[profile.profiling]
+inherits = "release"
+debug = "line-tables-only"
+strip = false
+
+[profile.dev]
+opt-level = 0
+debug = true
+overflow-checks = true
+lto = false
+
+[profile.test]
+opt-level = 1
+debug = true
+lto = false
+
+[profile.bench]
+opt-level = 3
+debug = false
+lto = "fat"
+codegen-units = 1
+
+# Custom profile for production
+[profile.production]
+inherits = "release"
+debug = false
+strip = true
+panic = "abort"
+lto = "fat"
+codegen-units = 1
+incremental = false
